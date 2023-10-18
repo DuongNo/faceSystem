@@ -8,20 +8,38 @@ from facenet_pytorch import MTCNN, InceptionResnetV1, fixed_image_standardizatio
 import time
 import glob
 from datetime import datetime
+import json
+
+
+#load yolov7
+from detector import Detector
+
+import torch.backends.cudnn as cudnn
+from numpy import random
+import copy
+import time
+from pathlib import Path
+
+from tracker import Tracker
 
 class faceNet:
     def __init__(self, embeddingsPath=None):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        print("device:",self.device)
         self.model = InceptionResnetV1(
                 classify=False,
                 pretrained="casia-webface"
             ).to(self.device)
         
+        self.detector = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = self.device)
         self.model.eval()
         self.embeddingsPath = embeddingsPath
         if embeddingsPath is not None:
-            self.faceEmbeddings, self.faceNames = self.load_faceslist(embeddingsPath)       
+            self.employee_ids, self.faceEmbeddings, self.faceNames = self.load_faceslist(embeddingsPath)       
         self.power = pow(10, 6)
+        #self.employee_ids = np.empty(shape=[0])
+        #self.faceNames = np.empty(shape=[0])
+        #self.faceEmbeddings = []
 
     def process(self, face, bbox=None):
         if bbox is not None: 
@@ -63,8 +81,9 @@ class faceNet:
             embeds = torch.load(DATA_PATH+'/faceslistCPU.pth')
         else:
             embeds = torch.load(DATA_PATH+'/faceslist.pth')
-        names = np.load(DATA_PATH+'/usernames.npy')
-        return embeds, names
+        names = np.load(DATA_PATH+'/usernames.npy', allow_pickle=True)
+        employee_ids = np.load(DATA_PATH+'/employee_ids.npy', allow_pickle=True)
+        return employee_ids, embeds, names
     
     def trans(self,img):
         transform = transforms.Compose([
@@ -99,36 +118,54 @@ class faceNet:
         #print("vec.shape:",vec.shape)
         return vec
 
-    def register(self, face, name, get_vector= False):
-        vec = self.face2vec(face)
+    def register(self, face, name, id, get_vector= False):    
+        boxes, _ = self.detector.detect(face)
+        if boxes is None:
+            return 1, None
+        for box in boxes:
+            bbox = list(map(int,box.tolist()))
+            face = self.extract_face(bbox, face)
+            vec = self.face2vec(face)
+            break
 
-        self.faceEmbeddings = torch.cat((self.faceEmbeddings,vec),0)
+        #face = cv2.resize(face,(160, 160), interpolation=cv2.INTER_AREA)
+        #vec = self.face2vec(face)
+
+        if self.employee_ids.shape[0] > 1:
+            self.faceEmbeddings = torch.cat((self.faceEmbeddings,vec),0)
+        else:
+            self.faceEmbeddings = vec
         self.faceNames = np.append(self.faceNames, name)
+        self.employee_ids = np.append(self.employee_ids, id)
         print("faceEmbeddings.shape:",self.faceEmbeddings.shape)
         print("faceNames.shape:",self.faceNames.shape)
+        print("employee_ids.shape:",self.employee_ids.shape)
 
-        embeddingPath = "outs/data/faceEmbedings"
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        if device == 'cpu':
-            torch.save(self.faceEmbeddings, embeddingPath+"/faceslistCPU.pth")
-        else:
-            torch.save(self.faceEmbeddings, embeddingPath+"/faceslist.pth")
-        np.save(embeddingPath+"/usernames", self.faceNames)
+        self.saveInfo()
         print('Update Completed! There are {0} people in FaceLists'.format(self.faceNames.shape[0]))
 
         if get_vector:
-            return vec
+            with torch.no_grad():
+                vec = vec.to("cpu").numpy()
+            return 0, json.dumps(vec.tolist())
                
-    def updateFace(self, face, name, get_vector= False):
-        out = np.where(self.faceNames == name)[0]
+    def updateFace(self, face, name, id, get_vector= False):
+        out = np.where(self.employee_ids == id)[0]
         if len(out) < 1:
-            return
-        vec = self.face2vec(face)
+            return 1, None
+        
+        boxes, _ = self.detector.detect(face)
+        if boxes is None:
+            return 1, None
+        for box in boxes:
+            bbox = list(map(int,box.tolist()))
+            face = self.extract_face(bbox, face)
+            vec = self.face2vec(face)
+            break
 
-        self.faceEmbeddings = torch.cat((self.faceEmbeddings,vec),0)
-        self.faceNames = np.append(self.faceNames, name)
-        print("faceEmbeddings.shape:",self.faceEmbeddings.shape)
-        print("faceNames.shape:",self.faceNames.shape)
+        vec = self.face2vec(face)
+        with torch.no_grad():
+            self.faceEmbeddings[out] = vec
 
         embeddingPath = "outs/data/faceEmbedings"
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -136,20 +173,43 @@ class faceNet:
             torch.save(self.faceEmbeddings, embeddingPath+"/faceslistCPU.pth")
         else:
             torch.save(self.faceEmbeddings, embeddingPath+"/faceslist.pth")
-        np.save(embeddingPath+"/usernames", self.faceNames)
-        print('Update Completed! There are {0} people in FaceLists'.format(self.faceNames.shape[0]))
+
+        self.saveInfo()
+        print("Update Face Completed!")
 
         if get_vector:
-            return vec
+            with torch.no_grad():
+                vec = vec.to("cpu").numpy()
+            return 0, json.dumps(vec.tolist())
+        
+    def removeId(self, id):
+        out = np.where(self.employee_ids == id)[0]
+        if len(out) < 1:
+            return 1
+        
+        self.employee_ids = np.delete(self.employee_ids,out)
+        self.faceNames = np.delete(self.faceNames,out)
+        #self.faceEmbeddings = self.faceEmbeddings[self.faceEmbeddings!=self.faceEmbeddings[out]]
+        self.faceEmbeddings = torch.cat([self.faceEmbeddings[:out], self.faceEmbeddings[out+1:]])
+        
+        self.saveInfo()
+        print("faceEmbeddings.shape:",self.faceEmbeddings.shape)
+        print("faceNames.shape:",self.faceNames.shape)
+        print("employee_ids.shape:",self.employee_ids.shape)
+        print('Update Completed! There are {0} people in FaceLists'.format(self.employee_ids.shape[0]))
+        return 0
         
 
         
     def update_faceEmbeddings(self,imagePath, embeddingPath):
         embeddings = []
         names = []
+        employee_ids = []
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
+        idx = 0
         for usr in os.listdir(imagePath):
+            idx +=1
             embeds = []
             for file in glob.glob(os.path.join(imagePath, usr)+'/*.jpg'):
                 # print(usr)
@@ -166,17 +226,41 @@ class faceNet:
             embeddings.append(embedding) # 1 cai list n cai [1,512]
             # print(embedding)
             names.append(usr)
+            employee_ids.append(str(idx))
             
         embeddings = torch.cat(embeddings) #[n,512]
         names = np.array(names)
+        employee_ids = np.array(employee_ids)
 
         if device == 'cpu':
             torch.save(embeddings, embeddingPath+"/faceslistCPU.pth")
         else:
             torch.save(embeddings, embeddingPath+"/faceslist.pth")
         np.save(embeddingPath+"/usernames", names)
+        np.save(embeddingPath+"/employee_ids", employee_ids)
         print('Update Completed! There are {0} people in FaceLists'.format(names.shape[0]))
+
+    def saveInfo(self, _embeddingPath=None):
+        embeddingPath = self.embeddingsPath
+        if _embeddingPath is not None:
+            embeddingPath = _embeddingPath
+
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        if device == 'cpu':
+            torch.save(self.faceEmbeddings, embeddingPath+"/faceslistCPU.pth")
+        else:
+            torch.save(self.faceEmbeddings, embeddingPath+"/faceslist.pth")
+        np.save(embeddingPath+"/usernames", self.faceNames)
+        np.save(embeddingPath+"/employee_ids", self.employee_ids)
+        print('Update Completed! There are {0} people in FaceLists'.format(self.faceNames.shape[0]))
         
+
+# DeepSORT -> Importing DeepSORT.
+#from deep_sort.application_util import preprocessing
+#from deep_sort.deep_sort import nn_matching
+#from deep_sort.deep_sort.detection import Detection
+#from deep_sort.deep_sort.tracker import Tracker
+#from deep_sort.tools import generate_detections as gdet
 
 def test_recognition():
     prev_frame_time = 0
@@ -184,10 +268,32 @@ def test_recognition():
     power = pow(10, 6)
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-    mtcnn = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = device)
+    detector = Detector(classes = [0])
+    detector.load_model('weights/yolov7-face.pt') 
+
+    mtcnn = MTCNN(thresholds= [0.5, 0.5, 0.5] ,keep_all=True, device = device)
     faceRecognition = faceNet("outs/data/faceEmbedings")
 
-    video = "video/faceRecognition.mp4"
+    # DeepSORT -> Initializing tracker.
+    '''
+    max_cosine_distance = 0.4
+    nn_budget = None
+    model_filename = '/home/vdc/project/computervison/python/face/faceSystem/deep_sort/model/mars-small128.pb'
+    encoder = gdet.create_box_encoder(model_filename, batch_size=1)
+    metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
+    tracker = Tracker(metric)
+    '''
+
+    tracker = Tracker()
+    detection_threshold = 0.5
+    colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for j in range(10)]
+
+
+    size = (640, 480)  
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter('track.mp4',fourcc, 20.0, (1280,960))
+
+    video = "video/vlc-record.mp4"
     cap = cv2.VideoCapture(video)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
@@ -196,23 +302,106 @@ def test_recognition():
         isSuccess, frame = cap.read()
         if isSuccess:
             frame_idx +=1
-            boxes, _ = mtcnn.detect(frame)
-            if boxes is not None:
-                for box in boxes:
+            print("frame ",frame_idx)
+            #print("frame.shape ",frame.shape)
+            if frame_idx < 200:
+                continue 
+            #bbox, pros = mtcnn.detect(frame)
+            yolo_dets = detector.detect(frame.copy())  
+            if yolo_dets is not None:
+                bbox = yolo_dets[:,:4]
+                pros = yolo_dets[:,4]
+                classes = yolo_dets[:,-1]
+                num_objects = yolo_dets.shape[0]
+
+                bboxes = []
+                scores = []
+                detections = []
+                for box, score in zip(bbox, pros):
                     bbox = list(map(int,box.tolist()))
-                    face = faceRecognition.extract_face(bbox, frame)
-                    if face is None:
+                    #frame = cv2.rectangle(frame, (bbox[0],bbox[1]), (bbox[2],bbox[3]), (0,0,255), 6)
+                    #cv2.putText(frame, '{:.3f}'.format(score), (bbox[0],bbox[3]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 1)
+                    #image_name = "outs/images/image" + '{:05}'.format(frame_idx) + ".jpg"
+                    #cv2.imwrite(image_name, frame)
+                    
+                    # DeepSORT -> Extracting Bounding boxes and its confidence scores.
+
+                    if score > detection_threshold:
+                        detections.append([bbox[0],bbox[1], bbox[2],bbox[3], score])
+
+                tracker.update(frame, detections)
+
+                for track in tracker.tracks:
+                    bbox = track.bbox
+                    x1, y1, x2, y2 = bbox
+                    track_id = track.track_id
+
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (colors[track_id % len(colors)]), 3)
+                    txt = 'id:' + str(track.track_id)
+                    org = (int(x1), int(y1)- 10)
+                    cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+
+                '''
+                    bboxes = []
+                    scores = []
+                    box = [int(bbox[0]), int(bbox[1]), int(bbox[2]-bbox[0]), int(bbox[3]-bbox[1])]
+                    bboxes.append(box)
+                    scores.append(score)
+                #frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
+                #writer.write(frame) 
+                #continue
+                    
+                # DeepSORT -> Getting appearance features of the object.
+                features = encoder(frame, bboxes)
+                # DeepSORT -> Storing all the required info in a list.
+                detections = [Detection(bbox, score, feature) for bbox, score, feature in zip(bboxes, scores, features)]
+
+                # DeepSORT -> Predicting Tracks.
+                tracker.predict()
+                tracker.update(detections)
+                #track_time = time.time() - prev_time
+
+                # DeepSORT -> Plotting the tracks.
+                print("len tracker.tracks = ",len(tracker.tracks))
+                trackok = 0
+                for track in tracker.tracks:
+                    if not track.is_confirmed() or track.time_since_update > 1:
                         continue
-                    faceRecognition.updateFace(face, "tuan")
-                    continue
-                    idx , score, name = faceRecognition.process(face)
+                    trackok +=1
+                    # DeepSORT -> Changing track bbox to top left, bottom right coordinates.
+                    bbox = list(track.to_tlbr())
+    
+                    # DeepSORT -> Writing Track bounding box and ID on the frame using OpenCV.
+                    txt = 'id:' + str(track.track_id)
+                    (label_width,label_height), baseline = cv2.getTextSize(txt , cv2.FONT_HERSHEY_SIMPLEX,1,1)
+                    top_left = tuple(map(int,[int(bbox[0]),int(bbox[1])-(label_height+baseline)]))
+                    top_right = tuple(map(int,[int(bbox[0])+label_width,int(bbox[1])]))
+                    org = tuple(map(int,[int(bbox[0]),int(bbox[1])-baseline]))
+    
+                    cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255,0,0), 2)
+                    cv2.rectangle(frame, top_left, top_right, (0,255,0), 2)
+                    cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+                '''
+
+
+                '''
+                    face = faceRecognition.extract_face(bbox, frame)
+                    name, idx , score,  = faceRecognition.process(face)
                     if idx != -1:
                         frame = cv2.rectangle(frame, (bbox[0],bbox[1]), (bbox[2],bbox[3]), (0,0,255), 6)
-                        score = torch.Tensor.cpu(score[0]).detach().numpy()*power
+                        #score = torch.Tensor.cpu(score[0]).detach().numpy()*power
                         frame = cv2.putText(frame, name + '_{:.2f}'.format(score), (bbox[0],bbox[1]), cv2.FONT_HERSHEY_DUPLEX, 2, (0,255,0), 2, cv2.LINE_8)
                     else:
                         frame = cv2.rectangle(frame, (bbox[0],bbox[1]), (bbox[2],bbox[3]), (0,0,255), 6)
                         frame = cv2.putText(frame,'Unknown', (bbox[0],bbox[1]), cv2.FONT_HERSHEY_DUPLEX, 2, (0,255,0), 2, cv2.LINE_8)
+                '''
+                frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
+                #cv2.imshow("test",img)
+                #if cv2.waitKey(0) & 0xFF == ord('q'):
+                #    break
+                #print("trackok = ",trackok)
+                #frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
+                writer.write(frame)
 
             new_frame_time = time.time()
             fps = 1/(new_frame_time-prev_frame_time)
@@ -220,10 +409,15 @@ def test_recognition():
             fps = str(int(fps))
             cv2.putText(frame, fps, (7, 70), cv2.FONT_HERSHEY_DUPLEX, 3, (100, 255, 0), 3, cv2.LINE_AA)
 
-        image_name = "outs/images/image" + '{:05}'.format(frame_idx) + ".jpg"
-        #image_name = "outs/check/check.jpg"
-        cv2.imwrite(image_name, frame)
+            #image_name = "outs/track/image" + '{:05}'.format(frame_idx) + ".jpg"
+            #image_name = "outs/check/check.jpg"
+            #cv2.imwrite(image_name, frame)          
+            if frame_idx > 1300:
+                break
+        else:
+            break
     cap.release()
+    writer.release()
 
 def updateFaceEmbeddings():
     faceRecognition = faceNet()
@@ -252,37 +446,24 @@ def test_facedetection():
 def test_facerecognition():
     name_face = "duy"
     facespath = "outs/faces/000002.jpg"
-    facespath = "images/test2.jpg"
+    #facespath = "images/test2.jpg"
     img = cv2.imread(facespath)
 
     embeddingPath = "outs/data/faceEmbedings"
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     faceRecognition = faceNet(embeddingPath)
 
-    out = faceRecognition.process(img)
-    print("out:",out)
-
-    print("faceRecognition.faceNames:", faceRecognition.faceNames)
-    print("All index value of 3 is: ", np.where(faceRecognition.faceNames == "duy")[0])
-
-    out = np.where(faceRecognition.faceNames == "duy")[0]
-    print("type(out):",type(out))
-    print("out:",out[0])
-
-    print("faceRecognition.faceEmbeddings:",faceRecognition.faceEmbeddings[out[0]].size())
-    vec = faceRecognition.face2vec(img)
-    print("vec.size = ", vec[0].size())
-    with torch.no_grad():
-        faceRecognition.faceEmbeddings[out[0]] = vec[0]
+    #faceRecognition.updateFace(img, name_face)
 
     out = faceRecognition.process(img)
     print("out:",out)
+    #exit()
 
-    #'''
-    if name_face in faceRecognition.faceNames:
-        print("Name exist")
-        return
-    faceRecognition.register(img, name_face)
+    '''
+    #if name_face in faceRecognition.faceNames:
+    #    print("Name exist")
+    #    return
+    #faceRecognition.register(img, name_face)
 
 
     if device == 'cpu':
@@ -291,11 +472,18 @@ def test_facerecognition():
         torch.save(faceRecognition.faceEmbeddings, embeddingPath+"/faceslist.pth")
     np.save(embeddingPath+"/usernames", faceRecognition.faceNames)
     print('Update Completed! There are {0} people in FaceLists'.format(faceRecognition.faceNames.shape[0]))
-    #'''
+    '''
 
-    
+from multiprocessing import Process
+
+def f(name):
+    while True:
+        print('hello', name)
+        time.sleep(1)
+
+
 if __name__ == "__main__":
-    #test_recognition()
+    test_recognition()
     #updateFaceEmbeddings()
     #test_facedetection()
-    test_facerecognition()
+    #test_facerecognition()
