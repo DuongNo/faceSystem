@@ -9,6 +9,9 @@ import time
 import glob
 from datetime import datetime
 import json
+from torch.nn import CosineSimilarity
+import math
+from sklearn.metrics import pairwise
 
 
 #load yolov7
@@ -101,17 +104,73 @@ class faceNet:
         #print("detect_embeds.shape:",detect_embeds.shape)
                         #[1,512,1]                                      [1,512,n]
         norm_diff = detect_embeds.unsqueeze(-1) - torch.transpose(local_embeds, 0, 1).unsqueeze(0)
-        # print(norm_diff)
+        #norm_diff = CosineSimilarity().forward(detect_embeds.unsqueeze(-1), torch.transpose(local_embeds, 0, 1).unsqueeze(0))
+        #print("norm_diff:",norm_diff)
         norm_score = torch.sum(torch.pow(norm_diff, 2), dim=1) #(1,n), moi cot la tong khoang cach euclide so vs embed moi
+        #print("norm_score:",norm_score)
         
         min_dist, embed_idx = torch.min(norm_score, dim = 1)
-        print(min_dist*self.power, self.faceNames[embed_idx])
+        #print(min_dist*self.power, self.faceNames[embed_idx])
         # print(min_dist.shape)
         if min_dist*self.power > threshold:
             return -1, -1
         else:
             return embed_idx, min_dist.double()
+
+    def inference2(self, model, face, local_embeds, threshold = 1):
+        embeds = []
+        embeds.append(model(self.trans(face).to(self.device).unsqueeze(0)))
+        detect_embeds = torch.cat(embeds) #[1,512]
+        # norm_score = CosineSimilarity().forward(detect_embeds.unsqueeze(-1), torch.transpose(local_embeds, 0, 1).unsqueeze(0))
+        # norm_diff = detect_embeds.unsqueeze(-1) - torch.transpose(local_embeds, 0, 1).unsqueeze(0)
+        # norm_score = torch.sum(torch.pow(norm_diff, 2), dim=1) #(1,n)
+        distances = []
+        for local_embed in local_embeds:
+            distances.append(self.distance(detect_embeds, local_embed, distance_metric=1))
+            
+        norm_score = torch.cat(distances).unsqueeze(0)
+        min_dist, embed_idx = torch.min(norm_score, dim = 1)
+        #print(min_dist*self.power, names[embed_idx])
+        if min_dist*self.power > threshold:
+            return -1, -1
+        else:
+            return embed_idx, (min_dist*self.power).double()
         
+    def distance_origin(self, embeddings1, embeddings2, distance_metric=0):
+        if distance_metric == 0:
+            # Euclidian distance
+            embeddings1 = embeddings1/np.linalg.norm(embeddings1, axis=1, keepdims=True)
+            embeddings2 = embeddings2/np.linalg.norm(embeddings2, axis=1, keepdims=True)
+            dist = np.sqrt(np.sum(np.square(np.subtract(embeddings1, embeddings2))))
+            return dist      
+        else:
+            # Distance based on cosine similarity
+            dot = np.sum(np.multiply(embeddings1, embeddings2), axis=1)
+            norm = np.linalg.norm(embeddings1, axis=1) * np.linalg.norm(embeddings2, axis=1)
+            similarity = dot/norm
+            dist = np.arccos(similarity) / math.pi
+            return dist[0]
+
+    def distance2(self, embeddings1, embeddings2, distance_metric=0):
+        embeddings1 = embeddings1.to("cpu")
+        embeddings2 = embeddings2.to("cpu")    
+        embeddings1 = embeddings1.detach().numpy()
+        embeddings2 = embeddings2.detach().numpy()
+        if distance_metric == 0:
+            # Euclidian distance
+            embeddings1 = embeddings1/np.linalg.norm(embeddings1, axis=1, keepdims=True)
+            embeddings2 = embeddings2/np.linalg.norm(embeddings2, keepdims=True)
+            dist = np.sqrt(np.sum(np.square(np.subtract(embeddings1, embeddings2))))
+            return torch.from_numpy(np.array([dist]))
+        else:
+            # Distance based on cosine similarity
+            dot = np.sum(np.multiply(embeddings1, embeddings2), axis=1)
+            norm = np.linalg.norm(embeddings1, axis=1) * np.linalg.norm(embeddings2)
+            similarity = dot/norm
+            dist = np.arccos(similarity) / math.pi
+            return torch.from_numpy(np.array([dist[0]]))
+        
+            
     def face2vec(self,face):
         face = Image.fromarray(face)
         vec = self.model(self.trans(face).to(self.device).unsqueeze(0))
@@ -131,7 +190,7 @@ class faceNet:
         #face = cv2.resize(face,(160, 160), interpolation=cv2.INTER_AREA)
         #vec = self.face2vec(face)
 
-        if self.employee_ids.shape[0] > 1:
+        if self.employee_ids.shape[0] > 0:
             self.faceEmbeddings = torch.cat((self.faceEmbeddings,vec),0)
         else:
             self.faceEmbeddings = vec
@@ -152,6 +211,7 @@ class faceNet:
     def updateFace(self, face, name, id, get_vector= False):
         out = np.where(self.employee_ids == id)[0]
         if len(out) < 1:
+            print("employee_ids was not exist:",id)
             return 1, None
         
         boxes, _ = self.detector.detect(face)
@@ -217,9 +277,18 @@ class faceNet:
                     img = Image.open(file)
                 except:
                     continue
+                img = np.array(img)
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                boxes, _ = self.detector.detect(img)
+                if boxes is None:
+                    continue
+                for box in boxes:
+                    bbox = list(map(int,box.tolist()))
+                    face = self.extract_face(bbox, img)
+                face = Image.fromarray(face)
                 with torch.no_grad():
                     # print('smt')
-                    embeds.append(self.model(self.trans(img).to(device).unsqueeze(0))) #1 anh, kich thuoc [1,512]
+                    embeds.append(self.model(self.trans(face).to(device).unsqueeze(0))) #1 anh, kich thuoc [1,512]
             if len(embeds) == 0:
                 continue
             embedding = torch.cat(embeds).mean(0, keepdim=True) #dua ra trung binh cua 30 anh, kich thuoc [1,512]
@@ -269,7 +338,8 @@ def test_recognition():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     detector = Detector(classes = [0])
-    detector.load_model('weights/yolov7-face.pt') 
+    #detector.load_model('weights/yolov7-face.pt')
+    detector.load_model('weights/yolov7-tiny.pt')  
 
     mtcnn = MTCNN(thresholds= [0.5, 0.5, 0.5] ,keep_all=True, device = device)
     faceRecognition = faceNet("outs/data/faceEmbedings")
@@ -291,9 +361,10 @@ def test_recognition():
 
     size = (640, 480)  
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    writer = cv2.VideoWriter('track.mp4',fourcc, 20.0, (1280,960))
+    writer = cv2.VideoWriter('track.mp4',fourcc, 25.0, (1280,960))
 
     video = "video/vlc-record.mp4"
+    video = "video/face_video.mp4"
     cap = cv2.VideoCapture(video)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
@@ -304,8 +375,8 @@ def test_recognition():
             frame_idx +=1
             print("frame ",frame_idx)
             #print("frame.shape ",frame.shape)
-            if frame_idx < 200:
-                continue 
+            #if frame_idx < 200:
+            #    continue 
             #bbox, pros = mtcnn.detect(frame)
             yolo_dets = detector.detect(frame.copy())  
             if yolo_dets is not None:
@@ -321,15 +392,23 @@ def test_recognition():
                     bbox = list(map(int,box.tolist()))
                     #frame = cv2.rectangle(frame, (bbox[0],bbox[1]), (bbox[2],bbox[3]), (0,0,255), 6)
                     #cv2.putText(frame, '{:.3f}'.format(score), (bbox[0],bbox[3]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 1)
-                    #image_name = "outs/images/image" + '{:05}'.format(frame_idx) + ".jpg"
-                    #cv2.imwrite(image_name, frame)
-                    
-                    # DeepSORT -> Extracting Bounding boxes and its confidence scores.
 
+                    # DeepSORT -> Extracting Bounding boxes and its confidence scores.
                     if score > detection_threshold:
                         detections.append([bbox[0],bbox[1], bbox[2],bbox[3], score])
 
                 tracker.update(frame, detections)
+
+                
+                for track in tracker.tracker.tracks:
+                    if len(track.face) > 0:
+                        #print("track.face:",track.face)
+                        name, idx , score,  = faceRecognition.process(frame,track.face[0])
+                        track.face = []
+                        track.names.append([name,round(score,3)])
+                        #print("track.names:",track.names)
+                        print('track ID {} : {}'.format(track.track_id,track.names))
+                
 
                 for track in tracker.tracks:
                     bbox = track.bbox
@@ -342,49 +421,6 @@ def test_recognition():
                     cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
 
                 '''
-                    bboxes = []
-                    scores = []
-                    box = [int(bbox[0]), int(bbox[1]), int(bbox[2]-bbox[0]), int(bbox[3]-bbox[1])]
-                    bboxes.append(box)
-                    scores.append(score)
-                #frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
-                #writer.write(frame) 
-                #continue
-                    
-                # DeepSORT -> Getting appearance features of the object.
-                features = encoder(frame, bboxes)
-                # DeepSORT -> Storing all the required info in a list.
-                detections = [Detection(bbox, score, feature) for bbox, score, feature in zip(bboxes, scores, features)]
-
-                # DeepSORT -> Predicting Tracks.
-                tracker.predict()
-                tracker.update(detections)
-                #track_time = time.time() - prev_time
-
-                # DeepSORT -> Plotting the tracks.
-                print("len tracker.tracks = ",len(tracker.tracks))
-                trackok = 0
-                for track in tracker.tracks:
-                    if not track.is_confirmed() or track.time_since_update > 1:
-                        continue
-                    trackok +=1
-                    # DeepSORT -> Changing track bbox to top left, bottom right coordinates.
-                    bbox = list(track.to_tlbr())
-    
-                    # DeepSORT -> Writing Track bounding box and ID on the frame using OpenCV.
-                    txt = 'id:' + str(track.track_id)
-                    (label_width,label_height), baseline = cv2.getTextSize(txt , cv2.FONT_HERSHEY_SIMPLEX,1,1)
-                    top_left = tuple(map(int,[int(bbox[0]),int(bbox[1])-(label_height+baseline)]))
-                    top_right = tuple(map(int,[int(bbox[0])+label_width,int(bbox[1])]))
-                    org = tuple(map(int,[int(bbox[0]),int(bbox[1])-baseline]))
-    
-                    cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255,0,0), 2)
-                    cv2.rectangle(frame, top_left, top_right, (0,255,0), 2)
-                    cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
-                '''
-
-
-                '''
                     face = faceRecognition.extract_face(bbox, frame)
                     name, idx , score,  = faceRecognition.process(face)
                     if idx != -1:
@@ -395,13 +431,14 @@ def test_recognition():
                         frame = cv2.rectangle(frame, (bbox[0],bbox[1]), (bbox[2],bbox[3]), (0,0,255), 6)
                         frame = cv2.putText(frame,'Unknown', (bbox[0],bbox[1]), cv2.FONT_HERSHEY_DUPLEX, 2, (0,255,0), 2, cv2.LINE_8)
                 '''
-                frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
-                #cv2.imshow("test",img)
-                #if cv2.waitKey(0) & 0xFF == ord('q'):
-                #    break
+                #frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
+                img = cv2.resize(frame, (640,480), interpolation = cv2.INTER_LINEAR)
+                cv2.imshow("test",img)
+                if cv2.waitKey(0) & 0xFF == ord('q'):
+                    break
                 #print("trackok = ",trackok)
                 #frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
-                writer.write(frame)
+                #writer.write(frame)
 
             new_frame_time = time.time()
             fps = 1/(new_frame_time-prev_frame_time)
@@ -412,8 +449,8 @@ def test_recognition():
             #image_name = "outs/track/image" + '{:05}'.format(frame_idx) + ".jpg"
             #image_name = "outs/check/check.jpg"
             #cv2.imwrite(image_name, frame)          
-            if frame_idx > 1300:
-                break
+            #if frame_idx > 1300:
+            #    break
         else:
             break
     cap.release()
@@ -421,7 +458,7 @@ def test_recognition():
 
 def updateFaceEmbeddings():
     faceRecognition = faceNet()
-    faceimages = "FaceNet-Infer/data/test_images"
+    faceimages = "data/faces_register/"
     embeddings = "outs/data/faceEmbedings"
     faceRecognition.update_faceEmbeddings(faceimages, embeddings)
 
@@ -444,16 +481,16 @@ def test_facedetection():
             cv2.imwrite(img_name,face)
 
 def test_facerecognition():
-    name_face = "duy"
+    name_face = "girl"
     facespath = "outs/faces/000002.jpg"
-    #facespath = "images/test2.jpg"
+    #facespath = "outs/tracks/1/00023.jpg"
     img = cv2.imread(facespath)
 
     embeddingPath = "outs/data/faceEmbedings"
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     faceRecognition = faceNet(embeddingPath)
 
-    #faceRecognition.updateFace(img, name_face)
+    #faceRecognition.register(img, name_face, len(faceRecognition.faceNames)+10)
 
     out = faceRecognition.process(img)
     print("out:",out)
