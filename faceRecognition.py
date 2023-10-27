@@ -22,6 +22,7 @@ from numpy import random
 import copy
 import time
 from pathlib import Path
+from collections import Counter
 
 from tracker import Tracker
 
@@ -54,10 +55,12 @@ class faceNet:
         if idx != -1:
             score = torch.Tensor.cpu(score[0]).detach().numpy()*self.power
             name = self.faceNames[idx]
+            employee_id = self.employee_ids[idx]
         else:
             name = "Unknown"
+            employee_id = -1
 
-        return [name, idx, score] 
+        return [name, employee_id, score] 
 
 
     def extract_face(self,box, img, margin=20):
@@ -338,22 +341,11 @@ def test_recognition():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     detector = Detector(classes = [0])
-    #detector.load_model('weights/yolov7-face.pt')
-    detector.load_model('weights/yolov7-tiny.pt')  
+    #model_path = "weights/yolov7/face_50epoch.pt"
+    model_path = 'weights/yolov7-face/yolov7-face.pt' 
+    detector.load_model(model_path)
 
-    mtcnn = MTCNN(thresholds= [0.5, 0.5, 0.5] ,keep_all=True, device = device)
     faceRecognition = faceNet("outs/data/faceEmbedings")
-
-    # DeepSORT -> Initializing tracker.
-    '''
-    max_cosine_distance = 0.4
-    nn_budget = None
-    model_filename = '/home/vdc/project/computervison/python/face/faceSystem/deep_sort/model/mars-small128.pb'
-    encoder = gdet.create_box_encoder(model_filename, batch_size=1)
-    metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
-    tracker = Tracker(metric)
-    '''
-
     tracker = Tracker()
     detection_threshold = 0.5
     colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for j in range(10)]
@@ -373,11 +365,6 @@ def test_recognition():
         isSuccess, frame = cap.read()
         if isSuccess:
             frame_idx +=1
-            print("frame ",frame_idx)
-            #print("frame.shape ",frame.shape)
-            #if frame_idx < 200:
-            #    continue 
-            #bbox, pros = mtcnn.detect(frame)
             yolo_dets = detector.detect(frame.copy())  
             if yolo_dets is not None:
                 bbox = yolo_dets[:,:4]
@@ -401,24 +388,44 @@ def test_recognition():
 
                 
                 for track in tracker.tracker.tracks:
-                    if len(track.face) > 0:
+                    if len(track.faces) > 0:
                         #print("track.face:",track.face)
-                        name, idx , score,  = faceRecognition.process(frame,track.face[0])
-                        track.face = []
-                        track.names.append([name,round(score,3)])
+                        name, idx , score,  = faceRecognition.process(frame,track.faces[0])
+                        #track.names.append([name,round(score,3)])
+                        track.names.append(name)
                         #print("track.names:",track.names)
-                        print('track ID {} : {}'.format(track.track_id,track.names))
-                
+                        #print('track ID {} : {}'.format(track.track_id,track.names))
+                        counter = Counter(track.names)
+                        most_common = counter.most_common()
+                        print('track ID {} : {}'.format(track.track_id,most_common))
+                        if len(track.names) >= 30:
+                            #counter = Counter(track.names)
+                            #most_common = counter.most_common()
+                            #print('track ID {} : {}'.format(track.track_id,most_common))
+                            if most_common[0][1] >  30:
+                                track.name = most_common[0][0]
+                                if track.face is None and name == most_common[0][0]:
+                                    x1, y1, x2, y2 = track.faces[0]
+                                    scale_x = int((x2 - x1)*0.3)
+                                    scale_y = int((y2 - y1)*0.3)
 
+                                    x1 = max(x1 - scale_x,0)
+                                    y1 = max(y1 - scale_y,0)
+                                    x2 = min(x2 + scale_x,frame.shape[1])
+                                    y2 = min(y2 + scale_y,frame.shape[0])
+
+                                    track.face = frame[y1:y2, x1:x2].copy()
+                        track.faces = []
+                
                 for track in tracker.tracks:
                     bbox = track.bbox
                     x1, y1, x2, y2 = bbox
                     track_id = track.track_id
 
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (colors[track_id % len(colors)]), 3)
-                    txt = 'id:' + str(track.track_id)
+                    txt = 'id:' + str(track.track_id) + "-" + track.name
                     org = (int(x1), int(y1)- 10)
-                    cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+                    cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,0,255), 2)
 
                 '''
                     face = faceRecognition.extract_face(bbox, frame)
@@ -432,19 +439,16 @@ def test_recognition():
                         frame = cv2.putText(frame,'Unknown', (bbox[0],bbox[1]), cv2.FONT_HERSHEY_DUPLEX, 2, (0,255,0), 2, cv2.LINE_8)
                 '''
                 #frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
-                img = cv2.resize(frame, (640,480), interpolation = cv2.INTER_LINEAR)
-                cv2.imshow("test",img)
-                if cv2.waitKey(0) & 0xFF == ord('q'):
-                    break
-                #print("trackok = ",trackok)
-                #frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
-                #writer.write(frame)
+                #frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)
+                #cv2.imshow("test",frame)
+                #if cv2.waitKey(1) & 0xFF == ord('q'):
+                #    break
 
-            new_frame_time = time.time()
-            fps = 1/(new_frame_time-prev_frame_time)
-            prev_frame_time = new_frame_time
-            fps = str(int(fps))
-            cv2.putText(frame, fps, (7, 70), cv2.FONT_HERSHEY_DUPLEX, 3, (100, 255, 0), 3, cv2.LINE_AA)
+                new_frame_time = time.time()
+                fps = 1/(new_frame_time-prev_frame_time)
+                prev_frame_time = new_frame_time
+                fps = str(int(fps))
+                cv2.putText(frame, fps, (7, 120), cv2.FONT_HERSHEY_DUPLEX, 2, (100, 255, 0), 3, cv2.LINE_AA)
 
             #image_name = "outs/track/image" + '{:05}'.format(frame_idx) + ".jpg"
             #image_name = "outs/check/check.jpg"
