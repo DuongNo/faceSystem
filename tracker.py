@@ -53,64 +53,31 @@ class Tracker:
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue
             bbox = track.to_tlbr()
-
             id = track.track_id
-
             name = track.name
 
             tracks.append(Track(id, bbox, name))
-            #print("track.track_id:",track.track_id)
-            #print("bbox:",bbox)
 
-            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-            x1 = max(x1,0)
-            y1 = max(y1,0)
-            x2 = min(x2,frame.shape[1])
-            y2 = min(y2,frame.shape[0])
-            if x2 - x1 > 60 and y2 - y1 > 70 and track.age - track.step_recognize > 3:
-                track.faces.append([x1, y1, x2, y2])
-                track.step_recognize = track.age
-
-            '''
-            #if (x2 - x1) > 50 and (y2 - y1) > 60:
-                scale_x = int((x2 - x1)*0.3)
-                scale_y = int((y2 - y1)*0.3)
-
-                x1 = max(x1 - scale_x,0)
-                y1 = max(y1 - scale_y,0)
-                x2 = min(x2 + scale_x,frame.shape[1])
-                y2 = min(y2 + scale_y,frame.shape[0])
-
-                
-                face = frame[y1:y2, x1:x2].copy()
-                track.face.append(face)
-                if face.shape[0] == 0 or face.shape[1] == 0:
-                    print("face.shape =",face.shape)
-                    print("bbox =",bbox)
-                    print("x1 = {}, y1 = {}, x2 = {}, y2 = {}",x1, y1, x2, y2)
-                    exit()
-            '''
+            if track.name == "" and track.age - track.step_recognize > 3:
+                x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                x1 = max(x1,0)
+                y1 = max(y1,0)
+                x2 = min(x2,frame.shape[1])
+                y2 = min(y2,frame.shape[0])
+                if x2 - x1 > 60 and y2 - y1 > 70:
+                    track.faces.append([x1, y1, x2, y2])
+                    track.step_recognize = track.age
 
         self.tracks = tracks
 
+        '''
         for track in self.tracker.deaded_tracks:
             if track.name != '':
                 print('track ID {} is dead: {}'.format(track.track_id,track.name))
                 img_name = "outs/track_faces/trackID_{}_{}.jpg".format(track.track_id,track.name)
-                cv2.imwrite(img_name,track.face)
+                #cv2.imwrite(img_name,track.face)
                 print("img_name:",img_name)
                 #print("track.face:",track.face.shape)
-
-                now = datetime.datetime.now()
-                retval, buffer = cv2.imencode('.jpg', track.face)
-                jpg_as_text = base64.b64encode(buffer)
-                WEB_SERVER = "http://172.16.50.91:8001/api/v1/attendance/attendance-daily"
-                employer_id = "0c53feb4-44c3-4f0c-a2b3-31029477eb24"
-                employer_id = str(track.employee_id)
-                ret = requests.post(WEB_SERVER,json={"employer_id":employer_id,
-                                         "check_in":str(now),
-                                         "data":str(jpg_as_text)})
-                print("ret:",ret)
 
 
                 #cv2.imshow("test_face",track.face)
@@ -125,9 +92,7 @@ class Tracker:
             #    image_name = '{:05}'.format(idx) + ".jpg"      
             #    image_path = os.path.join(path, image_name)
             #    cv2.imwrite(image_path, face)   
-        
-
-
+        '''
 
 class Track:
     track_id = -1

@@ -74,7 +74,7 @@ class Detector:
         img, im0 = self.load_image(source)
         img = torch.from_numpy(img).to(self.device)
         img = img.half() if self.half else img.float()  # uint8 to fp16/32
-        img /= 255.0  # 0 - 255 to 0.0 - 1.0
+        img /= 255.0  # 0 - 255 to 0.0q - 1.0
         if img.ndimension() == 3: # Single batch -> single image
             img = img.unsqueeze(0)
 
@@ -85,7 +85,7 @@ class Detector:
         # Apply NMS
         pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, classes=self.classes, agnostic=self.agnostic_nms)
         t2 = time_synchronized()
-        print(f'time (inference + NMS): ({t2 - t1:.3f}s)')
+        #print(f'time (inference + NMS): ({t2 - t1:.3f}s)')
 
         # Apply Classifier
         if self.classify:

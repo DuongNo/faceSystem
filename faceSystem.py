@@ -23,7 +23,7 @@ import datetime
 
 from typing import Union
 from pydantic import BaseModel
-from multiprocessing import Process
+from multiprocessing import Process, Value
 import base64
 from kafka_process import kafka_consummer
 
@@ -34,7 +34,7 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 power = pow(10, 6)
 mtcnn = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = device)
 
-list_process = []
+processes = {"max":0}
 
 def file2image(file):
     image = Image.open(io.BytesIO(file)).convert('RGB') 
@@ -53,11 +53,8 @@ def facerecognize(image):
 
     return names
 
-def facerecognize_process(video_path):
-    prev_frame_time = 0
-    new_frame_time = 0
-    power = pow(10, 6)
-
+WEB_SERVER = "http://172.16.50.91:8001/api/v1/attendance/attendance-daily"
+def facerecognize_process(video_path, status):
     faceRecognition = faceNet("outs/data/faceEmbedings")
     tracker = Tracker()
     detection_threshold = 0.5
@@ -72,9 +69,11 @@ def facerecognize_process(video_path):
     cap = cv2.VideoCapture(video_path)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
-    frame_idx = 0   
-    while cap.isOpened():
+    frame_idx = 0 
+    print("status.value:",status.value)
+    while cap.isOpened() and status.value == 1:
         isSuccess, frame = cap.read()
+        start_time = time.time()
         if isSuccess:
             frame_idx +=1
             print("frame_idx:",frame_idx)
@@ -106,52 +105,66 @@ def facerecognize_process(video_path):
                         #counter = Counter(track.names)
                         #most_common = counter.most_common()
                         #print('track ID {} : {}'.format(track.track_id,most_common))
-                        if len(track.names) >= 30:
+                        if len(track.names) >= 20:
                             counter = Counter(track.names)
                             most_common = counter.most_common()
                             print('track ID {} : {}'.format(track.track_id,most_common))
-                            if most_common[0][1] >  30:
+                            if most_common[0][1] >  20:
                                 track.name = most_common[0][0]
                                 track.employee_id = idx
-                                if track.face is None and name == most_common[0][0]:
-                                    x1, y1, x2, y2 = track.faces[0]
-                                    scale_x = int((x2 - x1)*0.3)
-                                    scale_y = int((y2 - y1)*0.3)
 
-                                    x1 = max(x1 - scale_x,0)
-                                    y1 = max(y1 - scale_y,0)
-                                    x2 = min(x2 + scale_x,frame.shape[1])
-                                    y2 = min(y2 + scale_y,frame.shape[0])
+                                x1, y1, x2, y2 = track.faces[0]
+                                scale_x = int((x2 - x1)*0.4)
+                                scale_y = int((y2 - y1)*0.4)
 
-                                    track.face = frame[y1:y2, x1:x2].copy()
+                                x1 = max(x1 - scale_x,0)
+                                y1 = max(y1 - scale_y,0)
+                                x2 = min(x2 + scale_x,frame.shape[1])
+                                y2 = min(y2 + scale_y,frame.shape[0])
+
+                                track.face = frame[y1:y2, x1:x2].copy()
+
+                                '''
+                                now = datetime.datetime.now()
+                                retval, buffer = cv2.imencode('.jpg', track.face)
+                                jpg_as_text = base64.b64encode(buffer)
+                                #employer_id = "0c53feb4-44c3-4f0c-a2b3-31029477eb24"
+                                employer_id = str(track.employee_id)
+                                ret = requests.post(WEB_SERVER,json={"employer_id":employer_id,
+                                                        "check_in":str(now),
+                                                        "data":str(jpg_as_text)})
+                                print("ret:",ret)
+                                '''
+
                         track.faces = []
-                
-                for track in tracker.tracks:
-                    bbox = track.bbox
-                    x1, y1, x2, y2 = bbox
-                    track_id = track.track_id
 
-                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (colors[track_id % len(colors)]), 3)
-                    if track.track_id is not None and track.name is not None:
-                        txt = 'id:' + str(track.track_id) + "-" + track.name
-                    else:
-                        txt = 'id:'
-                    org = (int(x1), int(y1)- 10)
-                    cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,0,255), 2)
-
-                new_frame_time = time.time()
-                fps = 1/(new_frame_time-prev_frame_time)
-                prev_frame_time = new_frame_time
+                end_time = time.time()
+                time_process = end_time-start_time
+                fps = 1/time_process
                 fps = "FPS: " + str(int(fps))
-                #cv2.putText(frame, fps, (7, 120), cv2.FONT_HERSHEY_DUPLEX, 2, (100, 255, 0), 3, cv2.LINE_AA)
-                #print('FPS {} : number of tracks {}'.format(fps,len(tracker.tracks)))
-                #frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)
-                #cv2.imshow("test",frame)
-                #if cv2.waitKey(1) & 0xFF == ord('q'):
-                #    break
+                print("frame_idx: {}  time process: {}".format(frame_idx, time_process))
+                
+                show_result = False
+                if show_result:
+                    for track in tracker.tracks:
+                        x1, y1, x2, y2 = track.bbox
+                        track_id = track.track_id
+
+                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (colors[track_id % len(colors)]), 3)
+                        txt = 'id:' + str(track.track_id) + "-" + track.name
+                        org = (int(x1), int(y1)- 10)
+                        cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,0,255), 2)
+
+                    cv2.putText(frame, fps, (7, 120), cv2.FONT_HERSHEY_DUPLEX, 2, (100, 255, 0), 3, cv2.LINE_AA)
+                    #print('FPS {} : number of tracks {}'.format(fps,len(tracker.tracks)))
+                    frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)
+                    cv2.imshow("test",frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
         else:
             break
     cap.release()
+    print("end process with :",video_path)
 
 class Item(BaseModel):
     name: str
@@ -219,24 +232,30 @@ def register(
                     ):  
     ret = 0
     #2 event: 
-    #1- run_process     - require: (camera_path)
-    #2- shutdown_process   - require: (id_process)
+    #1- run_process  -  run process     - require: (camera_path)
+    #2- shutdown     -  shutdown process   - require: (id_process)
     print("camera_path:",camera_path)
     print("event:",event)
+    print("id_process:",id_process)
+
+    #-- 1 need module check connect to camera_path
+    #-- 2 need mode for camera AI
 
     if event == "run_process":
-        p = Process(target=facerecognize_process, args=(camera_path,))
-        list_process.append(p)
+        status = Value('i', 0)
+        status.value = 1
+        p = Process(target=facerecognize_process, args=(camera_path, status))
+        processes["max"] +=1
+        id_process = str(processes["max"])
+        processes[id_process] = status
         p.start()
-        id_process = len(list_process) - 1
     else:
-        id_process = int(id_process)
-        list_process[id_process].kill()
-        list_process[id_process].join()
-        if not list_process[0].is_alive():
-            print("process was killed")
+        if id_process in processes.keys():
+            processes[id_process].value = 0
+            processes.pop(id_process)
         else:
-            print("process still alive")
+            print("id_process {} were not exist".format(id_process))
+            ret = -1
          
     return {"result": ret,
             "id_process": id_process}
@@ -281,6 +300,22 @@ async def create_upload_file(file: UploadFile = File(...)):
     names, idx, score = faceReg.process(image)
     print("names:",names)
     return {"names": names}
+
+
+def updateInfo4database():
+    BACKEND_SERVER = 'http://172.16.50.91:8001/api/v1/employer/all' 
+    headers = {
+                    'accept':"application/json"                 
+                }
+    res = requests.post(BACKEND_SERVER,json={"headers":headers}).json()
+    print("res:",res)
+    #member_names = res["member_names"]
+    #member_ids = res["member_names"]
+    #vectors = res["member_names"]
+
+    #faceRecognition = faceNet()
+    #embeddings = "outs/data/faceEmbedings"
+    #faceRecognition.update_faceEmbeddings(faceimages, embeddings)
 
 
 def test_recognition():
@@ -336,6 +371,8 @@ def updateFaceEmbeddings():
 if __name__ == "__main__":
     #video = "video/face_video.mp4"
     #facerecognize_process(video)
+    updateInfo4database()
+    '''
     now = datetime.datetime.now()
     data = {
         "id": "",
@@ -355,3 +392,5 @@ if __name__ == "__main__":
                                          "check_in":str(now),
                                          "data":str(jpg_as_text)})
     print("ret:",ret)
+    '''
+
