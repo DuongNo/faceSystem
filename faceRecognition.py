@@ -28,8 +28,12 @@ from tracker import Tracker
 import onnx
 from onnx2pytorch import ConvertModel
 
-class faceNet:
-    def __init__(self, embeddingsPath=None):
+from InsightFace_Pytorch.config import get_config
+from InsightFace_Pytorch.Learner import face_learner
+from InsightFace_Pytorch.util import load_facebank, prepare_facebank
+
+class faceRecogner:
+    def __init__(self, embeddingsPath=None, clearInfo=False):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         print("device:",self.device)
         '''
@@ -38,48 +42,81 @@ class faceNet:
                 pretrained="casia-webface"
             ).to(self.device)
         '''
-        onnx_model = onnx.load('weights/facerecognition/model_cam_29fcs.onnx')
-        self.model = ConvertModel(onnx_model).to(self.device)
         
-        self.detector = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = self.device)
-        self.model.eval()
+        #mtcnn = MTCNN()
+        self.conf = get_config(False)
+        self.learner = face_learner(self.conf, True)
+        if self.conf.device.type == 'cpu':
+            self.learner.load_state(self.conf, 'cpu_final.pth', True, True)
+        else:
+            self.learner.load_state(self.conf, 'ir_se50.pth', False, True)
+        self.learner.model.eval()
+        print('learner loaded')
+        
+        #update = False
+        #if update:
+        #    self.targets, self.names = prepare_facebank(self.conf, self.learner.model, mtcnn, False)
+        #    print('facebank updated')
+        #else:
+        #    self.targets, self.names = load_facebank(self.conf)
+        #    print('facebank loaded')
+        
+        #onnx_model = onnx.load('weights/facerecognition/model_cam_29fcs.onnx')
+        #self.model = ConvertModel(onnx_model).to(self.device)
+        self.model = None
+        
+        #self.detector = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = self.device)
+        self.detector = Detector(classes = [0])
+        model_path = 'weights/yolov7-face/yolov7-tiny.pt'
+        self.detector.load_model(model_path)
+        #self.model.eval()
         self.embeddingsPath = embeddingsPath
-        if embeddingsPath is not None:
+        
+        if clearInfo:
+            self.employee_ids = np.empty(shape=[0])
+            self.faceNames = np.empty(shape=[0])
+            self.faceEmbeddings = []
+        else:   
             self.employee_ids, self.faceEmbeddings, self.faceNames = self.load_faceslist(embeddingsPath)       
         self.power = pow(10, 6)
-        #self.employee_ids = np.empty(shape=[0])
-        #self.faceNames = np.empty(shape=[0])
-        #self.faceEmbeddings = []
+        print("len of self.faceNames:",len(self.faceNames))
 
     def process(self, face, bbox=None):
         if bbox is not None: 
             face = self.extract_face(bbox, face)
             
         face = Image.fromarray(face)
-        idx, score = self.inference(self.model, face, self.faceEmbeddings)
-
-        if idx != -1:
-            score = torch.Tensor.cpu(score[0]).detach().numpy()*self.power
-            name = self.faceNames[idx]
-            employee_id = self.employee_ids[idx]
-        else:
+        faces = [face]
+        results, score = self.learner.infer(self.conf, faces, self.faceEmbeddings, True)
+        
+        if results[0] == -1:
             name = "Unknown"
             employee_id = -1
-
-        if name is None:
-            name = "Unknown"           
-            #print("idx:",idx)
-            #print("self.faceNames[idx]:",self.faceNames[idx])
-            #print("self.faceNames:",self.faceNames)
-            #exit()
-        if employee_id is None:
-            employee_id = -1
+        else:
+            name = self.faceNames[results[0]]
+            employee_id = self.employee_ids[results[0]]
         
         return [name, employee_id, score] 
+    
+    def detect(self, img):
+        bboxes = []
+        scores = []
+        yolo_dets = self.detector.detect(img.copy())  
+        if yolo_dets is not None:
+            bbox = yolo_dets[:,:4]
+            pros = yolo_dets[:,4]
+            #classes = yolo_dets[:,-1]
+            #num_objects = yolo_dets.shape[0]
 
+            for box, score in zip(bbox, pros):
+                box = list(map(int,box.tolist()))
+                bboxes.append(box)
+                scores.append(score)
+                
+        return bboxes, scores
 
-    def extract_face(self,box, img, margin=20):
-        face_size = 224
+    def extract_face(self,box, img, margin=20, crop_size = 112):
+        face_size = crop_size
         img_size = (img.shape[1], img.shape[0])
         margin = [
             margin * (box[2] - box[0]) / (face_size - margin),
@@ -98,13 +135,15 @@ class faceNet:
         return face
     
     def load_faceslist(self, DATA_PATH):
-        if self.device == 'cpu':
-            embeds = torch.load(DATA_PATH+'/faceslistCPU.pth')
-        else:
-            embeds = torch.load(DATA_PATH+'/faceslist.pth')
+        embeds = torch.load(DATA_PATH+'/faceslist.pth')
         names = np.load(DATA_PATH+'/usernames.npy', allow_pickle=True)
         employee_ids = np.load(DATA_PATH+'/employee_ids.npy', allow_pickle=True)
         return employee_ids, embeds, names
+    
+    def clearInfo(self):
+        self.employee_ids = np.empty(shape=[0])
+        self.faceNames = np.empty(shape=[0])
+        self.faceEmbeddings = []
     
     def trans(self,img):
         transform = transforms.Compose([
@@ -192,22 +231,33 @@ class faceNet:
             
     def face2vec(self,face):
         face = Image.fromarray(face)
-        vec = self.model(self.trans(face).to(self.device).unsqueeze(0))
+        #vec = self.model(self.trans(face).to(self.device).unsqueeze(0))
+        vec = self.learner.model(self.conf.test_transform(face).to(self.conf.device).unsqueeze(0))
         #print("vec.shape:",vec.shape)
         return vec
 
-    def register(self, face, name, id, get_vector= False):    
-        boxes, _ = self.detector.detect(face)
+    def register(self, face, name, id, get_vector= False):
+        out = np.where(self.employee_ids == id)[0]
+        if len(out) > 0:
+            print("employee_ids: {} was exist:".format(id))
+            return 1
+            
+        boxes, _ = self.detect(face)
+        print("boxes register:",boxes)
         if boxes is None:
+            print("Dont have any faces")
             return 1, None
+        
+        bboxOK = False
         for box in boxes:
-            bbox = list(map(int,box.tolist()))
-            face = self.extract_face(bbox, face)
-            vec = self.face2vec(face)
-            break
-
-        #face = cv2.resize(face,(160, 160), interpolation=cv2.INTER_AREA)
-        #vec = self.face2vec(face)
+            if box[2] - box[0] > 80 and box[3] - box[1] > 80:
+                face = self.extract_face(box, face)
+                vec = self.face2vec(face)
+                bboxOK = True
+                break
+        if not bboxOK:
+            print("boxes size too small:",boxes)
+            return 1, None
 
         if self.employee_ids.shape[0] > 0:
             self.faceEmbeddings = torch.cat((self.faceEmbeddings,vec),0)
@@ -232,27 +282,28 @@ class faceNet:
         if len(out) < 1:
             print("employee_ids was not exist:",id)
             return 1, None
+        out = out[0]
         
-        boxes, _ = self.detector.detect(face)
+        boxes, _ = self.detect(face)
+        print("boxes updateFace:",boxes)
         if boxes is None:
+            print("Dont have any faces")
             return 1, None
+        bboxOK = False
         for box in boxes:
-            bbox = list(map(int,box.tolist()))
-            face = self.extract_face(bbox, face)
-            vec = self.face2vec(face)
-            break
+            if box[2] - box[0] > 80 and box[3] - box[1] > 80:
+                face = self.extract_face(box, face)
+                vec = self.face2vec(face)
+                bboxOK = True
+                break
+        if not bboxOK:
+            print("boxes size too small:",boxes)
+            return 1, None
 
-        vec = self.face2vec(face)
+        self.faceNames[out] = name
         with torch.no_grad():
             self.faceEmbeddings[out] = vec
-
-        embeddingPath = "outs/data/faceEmbedings"
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        if device == 'cpu':
-            torch.save(self.faceEmbeddings, embeddingPath+"/faceslistCPU.pth")
-        else:
-            torch.save(self.faceEmbeddings, embeddingPath+"/faceslist.pth")
-
+            
         self.saveInfo()
         print("Update Face Completed!")
 
@@ -263,12 +314,13 @@ class faceNet:
         
     def removeId(self, id):
         out = np.where(self.employee_ids == id)[0]
+        print("employee_ids:",out)
         if len(out) < 1:
             return 1
+        out = out[0]
         
         self.employee_ids = np.delete(self.employee_ids,out)
         self.faceNames = np.delete(self.faceNames,out)
-        #self.faceEmbeddings = self.faceEmbeddings[self.faceEmbeddings!=self.faceEmbeddings[out]]
         self.faceEmbeddings = torch.cat([self.faceEmbeddings[:out], self.faceEmbeddings[out+1:]])
         
         self.saveInfo()
@@ -334,11 +386,7 @@ class faceNet:
         if _embeddingPath is not None:
             embeddingPath = _embeddingPath
 
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        if device == 'cpu':
-            torch.save(self.faceEmbeddings, embeddingPath+"/faceslistCPU.pth")
-        else:
-            torch.save(self.faceEmbeddings, embeddingPath+"/faceslist.pth")
+        torch.save(self.faceEmbeddings, embeddingPath+"/faceslist.pth")
         np.save(embeddingPath+"/usernames", self.faceNames)
         np.save(embeddingPath+"/employee_ids", self.employee_ids)
         print('Update Completed! There are {0} people in FaceLists'.format(self.faceNames.shape[0]))
@@ -356,27 +404,33 @@ def test_recognition():
     model_path = 'weights/yolov7-face/yolov7-tiny.pt'
     detector.load_model(model_path)
 
-    faceRecognition = faceNet("outs/data/faceEmbedings")
+    faceRecognition = faceRecogner("outs/data/faceEmbedings")
     tracker = Tracker()
     detection_threshold = 0.5
     colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for j in range(10)]
-
 
     size = (640, 480)  
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     writer = cv2.VideoWriter('track.mp4',fourcc, 25.0, (1280,960))
 
-    video = "video/vlc-record.mp4"
-    #video = "video/face_video.mp4"
+    #video = "video/vlc-record.mp4"
+    video = "video/face_video.mp4"
+    #video = "rtsp://VDI1:Vdi123456789@172.16.9.254:554/MediaInput/264/Stream1"
     cap = cv2.VideoCapture(video)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
-    frame_idx = 0
+    #cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
+    #cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
+    #cv2.namedWindow('image',cv2.WINDOW_NORMAL)
+    frame_idx = 6500
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
     while cap.isOpened():
         isSuccess, frame = cap.read()
+        #print("frame size: ",frame.shape)
         start_time = time.time()
         if isSuccess:
             frame_idx +=1
+            if frame_idx % 100 == 0:
+                print("frame_idx:",frame_idx)
+                
             yolo_dets = detector.detect(frame.copy())  
             if yolo_dets is not None:
                 bbox = yolo_dets[:,:4]
@@ -391,14 +445,13 @@ def test_recognition():
                     bbox = list(map(int,box.tolist()))
                     #frame = cv2.rectangle(frame, (bbox[0],bbox[1]), (bbox[2],bbox[3]), (0,0,255), 6)
                     #cv2.putText(frame, '{:.3f}'.format(score), (bbox[0],bbox[3]+20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 1)
-
+          
                     # DeepSORT -> Extracting Bounding boxes and its confidence scores.
                     if score > detection_threshold:
                         detections.append([bbox[0],bbox[1], bbox[2],bbox[3], score])
 
                 tracker.update(frame, detections)
-
-                
+              
                 for track in tracker.tracker.tracks:
                     if len(track.faces) > 0:
                         #print("track.face:",track.face)
@@ -411,9 +464,9 @@ def test_recognition():
                         most_common = counter.most_common()
                         print('track ID {} : {}'.format(track.track_id,most_common))
                         if len(track.names) >= 30:
-                            #counter = Counter(track.names)
-                            #most_common = counter.most_common()
-                            #print('track ID {} : {}'.format(track.track_id,most_common))
+                            counter = Counter(track.names)
+                            most_common = counter.most_common()
+                            print('track ID {} : {}'.format(track.track_id,most_common))
                             if most_common[0][1] >  30:
                                 track.name = most_common[0][0]
                                 if track.face is None and name == most_common[0][0]:
@@ -433,6 +486,7 @@ def test_recognition():
                     bbox = track.bbox
                     x1, y1, x2, y2 = bbox
                     track_id = track.track_id
+                    #print("track_id: {}  width: {}  HEIGHT: {}".format(track_id, (x2-x1), (y2-y1)))
 
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (colors[track_id % len(colors)]), 3)
                     txt = 'id:' + str(track.track_id) + "-" + track.name
@@ -444,29 +498,30 @@ def test_recognition():
                 fps = 1/time_process
                 fps = str(int(fps))
                 cv2.putText(frame, fps, (7, 120), cv2.FONT_HERSHEY_DUPLEX, 2, (100, 255, 0), 3, cv2.LINE_AA)
-                print("frame_idx: {}  time process: {}".format(frame_idx, time_process))
+                #print("frame_idx: {}  time process: {}".format(frame_idx, time_process))
 
-                #frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)               
+                frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)               
                 #frame = cv2.resize(frame, (640,480), interpolation = cv2.INTER_LINEAR)
-                #cv2.imshow("test",frame)
-                #if cv2.waitKey(1) & 0xFF == ord('q'):
-                #    break
+                
+                cv2.imshow("image",frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
             #image_name = "outs/track/image" + '{:05}'.format(frame_idx) + ".jpg"
             #image_name = "outs/check/check.jpg"
             #cv2.imwrite(image_name, frame)          
             #if frame_idx > 1300:
             #    break
-            frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
-            writer.write(frame)
-            if frame_idx > 5000:
-                break
+            #frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
+            #writer.write(frame)
+            #if frame_idx > 5000:
+            #    break
         else:
             break
     cap.release()
     writer.release()
 
 def updateFaceEmbeddings():
-    faceRecognition = faceNet()
+    faceRecognition = faceRecogner()
     faceimages = "data/faces_register/"
     embeddings = "outs/data/faceEmbedings"
     faceRecognition.update_faceEmbeddings(faceimages, embeddings)
@@ -479,7 +534,7 @@ def test_facedetection():
     outpath = "outs/faces"
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     mtcnn = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = device)
-    faceRecognition = faceNet("outs/data/faceEmbedings")
+    faceRecognition = faceRecogner("outs/data/faceEmbedings")
     
     boxes, _ = mtcnn.detect(img)
     if boxes is not None:
@@ -489,38 +544,26 @@ def test_facedetection():
             img_name = f'{outpath}/{idx:06d}.jpg'
             cv2.imwrite(img_name,face)
 
-def test_facerecognition():
-    name_face = "girl"
-    facespath = "outs/faces/000002.jpg"
+def test_register():
+    name_face = "bach"
+    facespath = "data/faces_register/bach/00190.jpg"
     #facespath = "outs/tracks/1/00023.jpg"
     img = cv2.imread(facespath)
 
     embeddingPath = "outs/data/faceEmbedings"
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    faceRecognition = faceNet(embeddingPath)
+    #faceRecognition = faceRecogner(embeddingPath, clearInfo=True)
+    faceRecognition = faceRecogner(embeddingPath)
+    
+    #faceRecognition.removeId(2)
+    #return 0
 
-    #faceRecognition.register(img, name_face, len(faceRecognition.faceNames)+10)
+    faceRecognition.register(img, name_face, 6)
 
-    out = faceRecognition.process(img)
+    boxes, _ = faceRecognition.detect(img)
+    out = faceRecognition.process(img,boxes[0])
     print("out:",out)
     #exit()
-
-    '''
-    #if name_face in faceRecognition.faceNames:
-    #    print("Name exist")
-    #    return
-    #faceRecognition.register(img, name_face)
-
-
-    if device == 'cpu':
-        torch.save(faceRecognition.faceEmbeddings, embeddingPath+"/faceslistCPU.pth")
-    else:
-        torch.save(faceRecognition.faceEmbeddings, embeddingPath+"/faceslist.pth")
-    np.save(embeddingPath+"/usernames", faceRecognition.faceNames)
-    print('Update Completed! There are {0} people in FaceLists'.format(faceRecognition.faceNames.shape[0]))
-    '''
-
-from multiprocessing import Process
 
 def f(name):
     while True:
@@ -529,7 +572,8 @@ def f(name):
 
 
 if __name__ == "__main__":
-    test_recognition()
+    test_register()
+    #test_recognition()
     #updateFaceEmbeddings()
     #test_facedetection()
-    #test_facerecognition()
+    
