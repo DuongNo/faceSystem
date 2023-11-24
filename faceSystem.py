@@ -6,7 +6,7 @@ import os
 from random import randint
 import uuid
 
-from faceRecognition import faceNet
+from faceRecognition import faceRecogner
 from detector import Detector
 from tracker import Tracker
 import cv2
@@ -28,47 +28,39 @@ import base64
 from kafka_process import kafka_consummer
 
 embeddings_path = "outs/data/faceEmbedings"
-faceReg = faceNet(embeddings_path)
-
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-power = pow(10, 6)
-mtcnn = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = device)
-
+faceReg = faceRecogner(embeddings_path)
 processes = {"max":0}
 
 def file2image(file):
     image = Image.open(io.BytesIO(file)).convert('RGB') 
     image = np.array(image)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    return image 
+    return image
 
-def facerecognize(image):
-    boxes, _ = mtcnn.detect(image)
-    names = []
-    if boxes is not None:
-        for box in boxes:
-            bbox = list(map(int,box.tolist()))
-            name, idx , score = faceReg.process(image, bbox)
-            names.append(name)
-
-    return names
+class video_capture:
+    def __init__(self, video_path):
+        self.video_path = video_path
 
 WEB_SERVER = "http://172.16.50.91:8001/api/v1/attendance/attendance-daily"
-def facerecognize_process(video_path, status):
-    faceRecognition = faceNet("outs/data/faceEmbedings")
+def facerecognition(video_path, status):
+    faceRecognition = faceRecogner("outs/data/faceEmbedings")
     tracker = Tracker()
-    detection_threshold = 0.5
+    detection_threshold = 0.25
     colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for j in range(10)]
 
     detector = Detector(classes = [0])
     #model_path = 'weights/yolov7-face/yolov7-face.pt'
     model_path = 'weights/yolov7-face/yolov7-tiny.pt'  
     detector.load_model(model_path)
+    
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter('track.mp4',fourcc, 25.0, (1280,960))
 
     #video_path1 = "video/vlc-record.mp4"
+    #video_path = "rtsp://VDI1:Vdi123456789@172.16.9.254:554/MediaInput/264/Stream1"
     cap = cv2.VideoCapture(video_path)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
+    #cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
+    #cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
     frame_idx = 0 
     print("status.value:",status.value)
     while cap.isOpened() and status.value == 1:
@@ -76,7 +68,7 @@ def facerecognize_process(video_path, status):
         start_time = time.time()
         if isSuccess:
             frame_idx +=1
-            print("frame_idx:",frame_idx)
+            #print("frame_idx:",frame_idx)
             yolo_dets = detector.detect(frame.copy())  
             if yolo_dets is not None:
                 bbox = yolo_dets[:,:4]
@@ -99,19 +91,19 @@ def facerecognize_process(video_path, status):
                 
                 for track in tracker.tracker.tracks:
                     if len(track.faces) > 0:
-                        name, idx , score,  = faceRecognition.process(frame,track.faces[0])
+                        name, employee_id , score,  = faceRecognition.process(frame,track.faces[0])
                         #track.names.append([name,round(score,3)])
                         track.names.append(name)
-                        #counter = Counter(track.names)
-                        #most_common = counter.most_common()
-                        #print('track ID {} : {}'.format(track.track_id,most_common))
-                        if len(track.names) >= 20:
+                        counter = Counter(track.names)
+                        most_common = counter.most_common()
+                        print('track ID {} : {}'.format(track.track_id,most_common))
+                        if len(track.names) >= 30:
                             counter = Counter(track.names)
                             most_common = counter.most_common()
                             print('track ID {} : {}'.format(track.track_id,most_common))
-                            if most_common[0][1] >  20:
+                            if most_common[0][1] >  30:
                                 track.name = most_common[0][0]
-                                track.employee_id = idx
+                                track.employee_id = employee_id
 
                                 x1, y1, x2, y2 = track.faces[0]
                                 scale_x = int((x2 - x1)*0.4)
@@ -123,8 +115,10 @@ def facerecognize_process(video_path, status):
                                 y2 = min(y2 + scale_y,frame.shape[0])
 
                                 track.face = frame[y1:y2, x1:x2].copy()
+                                img_name = track.name + ".jpg"
+                                cv2.imwrite(img_name,track.face)
 
-                                '''
+                                
                                 now = datetime.datetime.now()
                                 retval, buffer = cv2.imencode('.jpg', track.face)
                                 jpg_as_text = base64.b64encode(buffer)
@@ -134,7 +128,8 @@ def facerecognize_process(video_path, status):
                                                         "check_in":str(now),
                                                         "data":str(jpg_as_text)})
                                 print("ret:",ret)
-                                '''
+                                print('employee name {} and employee_ID {}'.format(track.name,track.employee_id))
+                                
 
                         track.faces = []
 
@@ -142,7 +137,7 @@ def facerecognize_process(video_path, status):
                 time_process = end_time-start_time
                 fps = 1/time_process
                 fps = "FPS: " + str(int(fps))
-                print("frame_idx: {}  time process: {}".format(frame_idx, time_process))
+                #print("frame_idx: {}  time process: {}".format(frame_idx, time_process))
                 
                 show_result = False
                 if show_result:
@@ -157,13 +152,17 @@ def facerecognize_process(video_path, status):
 
                     cv2.putText(frame, fps, (7, 120), cv2.FONT_HERSHEY_DUPLEX, 2, (100, 255, 0), 3, cv2.LINE_AA)
                     #print('FPS {} : number of tracks {}'.format(fps,len(tracker.tracks)))
-                    frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)
-                    cv2.imshow("test",frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
+                    
+                    frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
+                    writer.write(frame)
+                    #frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)
+                    #cv2.imshow("test",frame)
+                    #if cv2.waitKey(1) & 0xFF == ord('q'):
+                        #break
         else:
             break
     cap.release()
+    writer.release()
     print("end process with :",video_path)
 
 class Item(BaseModel):
@@ -204,7 +203,8 @@ async def register(
     #2- updateface   - require: (employee_name, employee_id)
     #3- remove       - require: (employee_id)
 
-    print("employee_id_check:",employee_id)
+    print("employee_id:",employee_id)
+    print("employee_name:",employee_name)
     
     vec = None
     if event == "register":
@@ -217,14 +217,15 @@ async def register(
         result, vec = faceReg.updateFace(image, employee_name, employee_id, get_vector=True)
     else:
         result = faceReg.removeId(employee_id)
-         
+        
+    print("result:",result)
     return {"result": result,
             "employee_id": employee_id,
             "vector": vec}
 
 
 @app.post("/facerecognize_process")
-def register(
+def facerecognize_process(
                         camera_path: str = Header(None),
                         id_process: str = Header(None),
                         type_camera: str = Header(None),
@@ -234,6 +235,7 @@ def register(
     #2 event: 
     #1- run_process  -  run process     - require: (camera_path)
     #2- shutdown     -  shutdown process   - require: (id_process)
+    print("register process:")
     print("camera_path:",camera_path)
     print("event:",event)
     print("id_process:",id_process)
@@ -244,7 +246,7 @@ def register(
     if event == "run_process":
         status = Value('i', 0)
         status.value = 1
-        p = Process(target=facerecognize_process, args=(camera_path, status))
+        p = Process(target=facerecognition, args=(camera_path, status))
         processes["max"] +=1
         id_process = str(processes["max"])
         processes[id_process] = status
@@ -259,48 +261,24 @@ def register(
          
     return {"result": ret,
             "id_process": id_process}
-
-
-@app.post("/facerecognition")
-async def register(
-                        file: UploadFile,
-                        event: str = Header(None)
-                    ):
-    #3 event: 
-    #1- process     - facedetection + facerecognition , require: image
-    #2- facedetection   - require: image
-    #3- facerecognition       - require: face_image
     
+@app.post("/get_status")
+def facerecognize_process(
+                        id_process: str = Header(None),
+                        status: str = Header(None)
+                    ): 
+    # status: 
+    #1- AI_process  -  status of AI process 
+    print("get_status:",status) 
     ret = 0
-    if event == "process":
-        contents = await file.read()
-        image = file2image(contents)
-        names = facerecognize(image)
-        print("names:",names)
+    process_status = "OFF"
+    
+    if id_process in processes.keys():
+        if processes[id_process].value == 1:
+            process_status = "ON"
 
-    elif event == "facedetection":
-        contents = await file.read()
-        image = file2image(contents)
-        
-    elif event == "facerecognition":
-        contents = await file.read()
-        image = file2image(contents)
-        names, idx, score = faceReg.process(image)
-        print("names:",names)
-         
     return {"result": ret,
-            "names": names,
-            "names": names}
-
-@app.post("/face/")
-async def create_upload_file(file: UploadFile = File(...)):
-    contents = await file.read()
-    image = file2image(contents)
-
-    names, idx, score = faceReg.process(image)
-    print("names:",names)
-    return {"names": names}
-
+            "process_status": process_status}
 
 def updateInfo4database():
     BACKEND_SERVER = 'http://172.16.50.91:8001/api/v1/employer/all' 
@@ -316,57 +294,6 @@ def updateInfo4database():
     #faceRecognition = faceNet()
     #embeddings = "outs/data/faceEmbedings"
     #faceRecognition.update_faceEmbeddings(faceimages, embeddings)
-
-
-def test_recognition():
-    prev_frame_time = 0
-    new_frame_time = 0
-    power = pow(10, 6)
-
-    mtcnn = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = device)
-    faceRecognition = faceNet("outs/data/faceEmbedings")
-
-    video = "video/faceRecognition.mp4"
-    cap = cv2.VideoCapture(video)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
-    frame_idx = 0
-    while cap.isOpened():
-        isSuccess, frame = cap.read()
-        if isSuccess:
-            frame_idx +=1
-            boxes, _ = mtcnn.detect(frame)
-            if boxes is not None:
-                for box in boxes:
-                    bbox = list(map(int,box.tolist()))
-                    face = faceReg.extract_face(bbox, frame)
-                    if face is None:
-                        continue
-                    idx , score, name = faceReg.process(face)
-                    if idx != -1:
-                        frame = cv2.rectangle(frame, (bbox[0],bbox[1]), (bbox[2],bbox[3]), (0,0,255), 6)
-                        score = torch.Tensor.cpu(score[0]).detach().numpy()*power
-                        frame = cv2.putText(frame, name + '_{:.2f}'.format(score), (bbox[0],bbox[1]), cv2.FONT_HERSHEY_DUPLEX, 2, (0,255,0), 2, cv2.LINE_8)
-                    else:
-                        frame = cv2.rectangle(frame, (bbox[0],bbox[1]), (bbox[2],bbox[3]), (0,0,255), 6)
-                        frame = cv2.putText(frame,'Unknown', (bbox[0],bbox[1]), cv2.FONT_HERSHEY_DUPLEX, 2, (0,255,0), 2, cv2.LINE_8)
-
-            new_frame_time = time.time()
-            fps = 1/(new_frame_time-prev_frame_time)
-            prev_frame_time = new_frame_time
-            fps = str(int(fps))
-            cv2.putText(frame, fps, (7, 70), cv2.FONT_HERSHEY_DUPLEX, 3, (100, 255, 0), 3, cv2.LINE_AA)
-
-        image_name = "outs/images/image" + '{:05}'.format(frame_idx) + ".jpg"
-        #image_name = "outs/check/check.jpg"
-        cv2.imwrite(image_name, frame)
-    cap.release()
-
-def updateFaceEmbeddings():
-    faceRecognition = faceNet()
-    faceimages = "FaceNet-Infer/data/test_images"
-    embeddings = "outs/data/faceEmbedings"
-    faceRecognition.update_faceEmbeddings(faceimages, embeddings)
 
 if __name__ == "__main__":
     #video = "video/face_video.mp4"

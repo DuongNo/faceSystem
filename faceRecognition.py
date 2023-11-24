@@ -76,8 +76,11 @@ class faceRecogner:
             self.employee_ids = np.empty(shape=[0])
             self.faceNames = np.empty(shape=[0])
             self.faceEmbeddings = []
+            self.saveInfo()
+            print("Clear Info")
         else:   
-            self.employee_ids, self.faceEmbeddings, self.faceNames = self.load_faceslist(embeddingsPath)       
+            self.employee_ids, self.faceEmbeddings, self.faceNames = self.load_faceslist(embeddingsPath)   
+            print("Load Info:",len(self.employee_ids))    
         self.power = pow(10, 6)
         print("len of self.faceNames:",len(self.faceNames))
 
@@ -553,27 +556,27 @@ def test_register():
     embeddingPath = "outs/data/faceEmbedings"
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     #faceRecognition = faceRecogner(embeddingPath, clearInfo=True)
-    faceRecognition = faceRecogner(embeddingPath)
+    #faceRecognition = faceRecogner(embeddingPath)
     
-    #faceRecognition.removeId(2)
-    #return 0
+    #faceRecognition.removeId(1)
+    return 0
 
-    faceRecognition.register(img, name_face, 6)
+    faceRecognition.register(img, name_face, 1)
 
     boxes, _ = faceRecognition.detect(img)
     out = faceRecognition.process(img,boxes[0])
     print("out:",out)
     #exit()
 
-def f(name):
-    while True:
-        print('hello', name)
-        time.sleep(1)
+def clearInfo():
+    embeddingPath = "outs/data/faceEmbedings"
+    faceRecognition = faceRecogner(embeddingPath, clearInfo=True)
 
 
 if __name__ == "__main__":
-    test_register()
-    #test_recognition()
+    #clearInfo()
+    #test_register()
+    test_recognition()
     #updateFaceEmbeddings()
     #test_facedetection()
     
