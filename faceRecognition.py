@@ -12,6 +12,7 @@ import json
 from torch.nn import CosineSimilarity
 import math
 from sklearn.metrics import pairwise
+from hopenet import headPose
 
 
 #load yolov7
@@ -406,6 +407,9 @@ def test_recognition():
     model_path = 'weights/yolov7-face/yolov7-face.pt' 
     model_path = 'weights/yolov7-face/yolov7-tiny.pt'
     detector.load_model(model_path)
+    
+    model_path = "deep-head-pose/hopenet_alpha1.pkl"
+    headpose = headPose(model_path)
 
     faceRecognition = faceRecogner("outs/data/faceEmbedings")
     tracker = Tracker()
@@ -423,7 +427,7 @@ def test_recognition():
     #cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
     #cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
     #cv2.namedWindow('image',cv2.WINDOW_NORMAL)
-    frame_idx = 6500
+    frame_idx = 2700
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
     while cap.isOpened():
         isSuccess, frame = cap.read()
@@ -458,6 +462,11 @@ def test_recognition():
                 for track in tracker.tracker.tracks:
                     if len(track.faces) > 0:
                         #print("track.face:",track.face)
+                        yaw_predicted, pitch_predicted, roll_predicted, _  = headpose.getHeadPose(track.faces[0], frame)                      
+                        if (yaw_predicted > 20 or yaw_predicted < -20) or (pitch_predicted > 20 or pitch_predicted < -20) or (roll_predicted > 20 or roll_predicted < -20):
+                            track.faces = []
+                            continue
+                        
                         name, idx , score,  = faceRecognition.process(frame,track.faces[0])
                         #track.names.append([name,round(score,3)])
                         track.names.append(name)
@@ -466,11 +475,11 @@ def test_recognition():
                         counter = Counter(track.names)
                         most_common = counter.most_common()
                         print('track ID {} : {}'.format(track.track_id,most_common))
-                        if len(track.names) >= 30:
+                        if len(track.names) >= 20:
                             counter = Counter(track.names)
                             most_common = counter.most_common()
                             print('track ID {} : {}'.format(track.track_id,most_common))
-                            if most_common[0][1] >  30:
+                            if most_common[0][1] >  20:
                                 track.name = most_common[0][0]
                                 if track.face is None and name == most_common[0][0]:
                                     x1, y1, x2, y2 = track.faces[0]

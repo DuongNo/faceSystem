@@ -26,6 +26,8 @@ from pydantic import BaseModel
 from multiprocessing import Process, Value
 import base64
 from kafka_process import kafka_consummer
+from videoCapture import video_capture
+from hopenet import headPose
 
 embeddings_path = "outs/data/faceEmbedings"
 faceReg = faceRecogner(embeddings_path)
@@ -37,12 +39,8 @@ def file2image(file):
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     return image
 
-class video_capture:
-    def __init__(self, video_path):
-        self.video_path = video_path
-
 WEB_SERVER = "http://172.16.50.91:8001/api/v1/attendance/attendance-daily"
-def facerecognition(video_path, status):
+def facerecognition(video_path, topic, bootstrap_servers, status):
     faceRecognition = faceRecogner("outs/data/faceEmbedings")
     tracker = Tracker()
     detection_threshold = 0.25
@@ -53,22 +51,31 @@ def facerecognition(video_path, status):
     model_path = 'weights/yolov7-face/yolov7-tiny.pt'  
     detector.load_model(model_path)
     
+    model_path = "deep-head-pose/hopenet_alpha1.pkl"
+    headpose = headPose(model_path)
+    
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     writer = cv2.VideoWriter('track.mp4',fourcc, 25.0, (1280,960))
 
     #video_path1 = "video/vlc-record.mp4"
     #video_path = "rtsp://VDI1:Vdi123456789@172.16.9.254:554/MediaInput/264/Stream1"
-    cap = cv2.VideoCapture(video_path)
-    #cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
-    #cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
+    #cap = cv2.VideoCapture(video_path)
+    topic = "cam1"
+    bootstrap_servers = ["172.16.50.91:9092"]
+    #if video_path is not None:
+    #    cap = video_capture(video_path=video_path)
+    #else:
+    #    cap = video_capture(topic=topic, bootstrap_servers=bootstrap_servers)
+    cap = video_capture(topic=topic, bootstrap_servers=bootstrap_servers)
     frame_idx = 0 
     print("status.value:",status.value)
-    while cap.isOpened() and status.value == 1:
-        isSuccess, frame = cap.read()
+    isSuccess = True    
+    while isSuccess and status.value == 1:
+        isSuccess, frame = cap.getFrame()
         start_time = time.time()
         if isSuccess:
             frame_idx +=1
-            #print("frame_idx:",frame_idx)
+            print("frame_idx:",frame_idx)
             yolo_dets = detector.detect(frame.copy())  
             if yolo_dets is not None:
                 bbox = yolo_dets[:,:4]
@@ -91,6 +98,11 @@ def facerecognition(video_path, status):
                 
                 for track in tracker.tracker.tracks:
                     if len(track.faces) > 0:
+                        yaw_predicted, pitch_predicted, roll_predicted, _  = headpose.getHeadPose(track.faces[0], frame)                      
+                        if (yaw_predicted > 20 or yaw_predicted < -20) or (pitch_predicted > 20 or pitch_predicted < -20) or (roll_predicted > 20 or roll_predicted < -20):
+                            track.faces = []
+                            continue
+                        
                         name, employee_id , score,  = faceRecognition.process(frame,track.faces[0])
                         #track.names.append([name,round(score,3)])
                         track.names.append(name)
@@ -130,7 +142,6 @@ def facerecognition(video_path, status):
                                 print("ret:",ret)
                                 print('employee name {} and employee_ID {}'.format(track.name,track.employee_id))
                                 
-
                         track.faces = []
 
                 end_time = time.time()
@@ -139,7 +150,7 @@ def facerecognition(video_path, status):
                 fps = "FPS: " + str(int(fps))
                 #print("frame_idx: {}  time process: {}".format(frame_idx, time_process))
                 
-                show_result = False
+                show_result = True
                 if show_result:
                     for track in tracker.tracks:
                         x1, y1, x2, y2 = track.bbox
@@ -156,12 +167,12 @@ def facerecognition(video_path, status):
                     frame = cv2.resize(frame, (1280,960), interpolation = cv2.INTER_LINEAR)
                     writer.write(frame)
                     #frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)
-                    #cv2.imshow("test",frame)
-                    #if cv2.waitKey(1) & 0xFF == ord('q'):
-                        #break
+                    cv2.imshow("test",frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
         else:
             break
-    cap.release()
+    #cap.release()
     writer.release()
     print("end process with :",video_path)
 
@@ -227,6 +238,8 @@ async def register(
 @app.post("/facerecognize_process")
 def facerecognize_process(
                         camera_path: str = Header(None),
+                        topic: str = Header(None),
+                        bootstrap_servers: str = Header(None),
                         id_process: str = Header(None),
                         type_camera: str = Header(None),
                         event: str = Header(None)
@@ -237,6 +250,8 @@ def facerecognize_process(
     #2- shutdown     -  shutdown process   - require: (id_process)
     print("register process:")
     print("camera_path:",camera_path)
+    print("topic:",topic)
+    print("bootstrap_servers:",bootstrap_servers)
     print("event:",event)
     print("id_process:",id_process)
 
@@ -246,7 +261,7 @@ def facerecognize_process(
     if event == "run_process":
         status = Value('i', 0)
         status.value = 1
-        p = Process(target=facerecognition, args=(camera_path, status))
+        p = Process(target=facerecognition, args=(camera_path, topic, bootstrap_servers, status))
         processes["max"] +=1
         id_process = str(processes["max"])
         processes[id_process] = status
@@ -280,25 +295,27 @@ def facerecognize_process(
     return {"result": ret,
             "process_status": process_status}
 
-def updateInfo4database():
-    BACKEND_SERVER = 'http://172.16.50.91:8001/api/v1/employer/all' 
+def updateInfoFromdatabase():
+    BACKEND_SERVER = 'http://172.16.50.91:8001/api/v1/employer/all/' 
     headers = {
                     'accept':"application/json"                 
                 }
-    res = requests.post(BACKEND_SERVER,json={"headers":headers}).json()
-    print("res:",res)
-    #member_names = res["member_names"]
-    #member_ids = res["member_names"]
-    #vectors = res["member_names"]
+    res = requests.get(BACKEND_SERVER,json={"headers":headers}).json()
+    #print("res:",res)
+    data = res["data"]
+    info = []
+    for d in data:
+        full_name = d["full_name"]
+        id = d["id"]
+        face_vec = d["face_vector"]
+        info.append([id, full_name, face_vec])
+        print("full_name: {} _____ id: {}".format(full_name,id))
 
-    #faceRecognition = faceNet()
-    #embeddings = "outs/data/faceEmbedings"
-    #faceRecognition.update_faceEmbeddings(faceimages, embeddings)
 
 if __name__ == "__main__":
     #video = "video/face_video.mp4"
     #facerecognize_process(video)
-    updateInfo4database()
+    updateInfoFromdatabase()
     '''
     now = datetime.datetime.now()
     data = {
