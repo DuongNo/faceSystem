@@ -1,0 +1,43 @@
+{
+    "version": 1,
+    "bind": {
+        "address": "127.0.0.1",
+        "port": 18555
+    },
+    "projectPath":"",
+    "mode": {
+        "_comment1":"get input from <camera> or <kafka>",
+        "input":"camera", 
+        "_comment2":"ON/OFF features AI run ",
+        "ai_features":{
+            "security": true,
+            "traffic": false
+        } 
+    },
+    "security": {
+        "area_working":[0,0,1920,1080],
+        "WEB_SERVER":"http://172.16.50.91:8001/api/v1/attendance/attendance-daily",
+        "topic":"cam1",
+        "topic_ai":"cam1_ai",
+        "bootstrap_servers":["172.16.50.91:9092"],
+        "embeddings_path":"outs/data/faceEmbedings",
+        "weights": {
+            "faceDetection":"weights/yolov7-face/yolov7-tiny.pt",
+            "faceRecognition":"",         
+            "headPose":"deep-head-pose/hopenet_alpha1.pkl"
+        }
+    },
+    "traffic": {
+        "area_working":[0,0,1920,1080],
+        "weights": {
+            "vehicalDetection":"",
+            "plateDetection":"",
+            "characterDetection":""
+        }
+    },
+    "debug": {
+        "saveVideo":true,
+        "showImg":false
+    }
+
+}
