@@ -1,4 +1,3 @@
-from facenet_pytorch import MTCNN
 from fastapi import FastAPI,  UploadFile, File, Header, Form
 from fastapi.responses import FileResponse
 from typing import Annotated
@@ -31,7 +30,8 @@ from hopenet import headPose
 from producer_result import ResultProcuder
 from config import conf 
 
-embeddings_path = conf.security.embeddings_path
+embeddings_path = conf.embeddings_path
+
 print("embeddings_path:",embeddings_path)
 faceReg = faceRecogner(embeddings_path)
 processes = {"max":0}
@@ -43,7 +43,7 @@ def file2image(file):
     return image
 
 WEB_SERVER = "http://172.16.50.91:8001/api/v1/attendance/attendance-daily"
-class Security:
+class faceProcess:
     def __init__(self, conf):
         self.conf = conf
         
@@ -51,12 +51,12 @@ class Security:
         self.tracker = Tracker()
         self.detection_threshold = 0.25
 
-        self.detector = Detector(classes = [0])
+        self.detector = Detector(classes = [0,1,2,3,4,5])
         #model_path = 'weights/yolov7-face/yolov7-face.pt'
-        self.detector_path = '../weights/yolov7-face/yolov7-tiny.pt'  
+        self.detector_path = '/home/vdc/project/computervision/python/weights/yolov7-face/yolov7-face.pt'  
         self.detector.load_model(self.detector_path)
 
-        self.head_pose_path = "deep-head-pose/hopenet_alpha1.pkl"
+        self.head_pose_path = "../weights/hopenet_alpha1.pkl"
         self.headpose = headPose(self.head_pose_path)
 
     def facerecognize(self, frame):
@@ -72,6 +72,11 @@ class Security:
             detections = []
             for box, score in zip(bbox, pros):
                 bbox = list(map(int,box.tolist()))
+                #x1, y1, x2, y2 = bbox
+                #im = cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 3)
+                #im = cv2.resize(im, (960,720), interpolation = cv2.INTER_LINEAR)
+                #cv2.imshow("frame detect",im)
+                
 
                 # DeepSORT -> Extracting Bounding boxes and its confidence scores.
                 if score > self.detection_threshold:
@@ -135,44 +140,95 @@ class Security:
             return self.tracker.tracks
         return None
 
-class Processer:
+class AI_Process:
     def __init__(self, conf, mode):
         self.conf = conf
-        self.security = Security(conf)     
+        self.face_processer = faceProcess(conf)     
         self.mode = mode
+        
+    def initialize(self, type_camera, video_path, topic, topic_result, bootstrap_servers):
+        self.video_path = video_path
+        try:
+            #self.resutlSender = ResultProcuder(topic_result, bootstrap_servers)
+        
+            if type_camera == "camera" or type_camera == "cameraAI":
+                self.cap = video_capture(video_path=video_path)
+            else:
+                self.cap = video_capture(topic=topic, bootstrap_servers=bootstrap_servers)
+        except Exception as e:
+            print(e)
+            status[0] = 0
+            print("Can not init processer:")
+            
+        return
  
     def process(self, frame):
         ret = None
         if self.mode == "security":
-            ret =  self.security.facerecognize(frame)
+            ret =  self.face_processer.facerecognize(frame)
             
         elif self.mode == "traffic":
             ret =  "traffic"
             
         return ret
     
-    
-def mainProcess(mode, type_camera, video_path, topic, topic_result, bootstrap_servers, status):
-    print("Start process with status.value:",status[0])
-    try:
-        processer = Processer(conf, mode)
-        resutlSender = ResultProcuder(topic_result, bootstrap_servers)
-    
-        if type_camera == "camera" or type_camera == "cameraAI":
-            cap = video_capture(video_path=video_path)
-        else:
-            cap = video_capture(topic=topic, bootstrap_servers=bootstrap_servers)
-    except Exception as e:
-        print(e)
+    def image_process(self, status):
+        frame_idx = 0 
+        isSuccess = True    
+        colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for j in range(10)]
+        while isSuccess and status[0] == 1: 
+            isSuccess, frame = self.cap.getFrame()
+            start_time = time.time()
+            if isSuccess:
+                print("frame_idx:",frame_idx)
+                ret = self.process(frame)
+                    
+                end_time = time.time()
+                time_process = end_time-start_time
+                fps = 1/time_process
+                fps = "FPS: " + str(int(fps))
+                #print("frame_idx: {}  time process: {}  FPS: {}".format(frame_idx, time_process, fps))
+                
+                show_result = True
+                save_video = False
+                if show_result or save_video or status[1] == 1: # status.value == 2: send AI result to kafka server
+                    if ret is not None:
+                        for track in ret:
+                            x1, y1, x2, y2 = track.bbox
+                            track_id = track.track_id
+
+                            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (colors[track_id % len(colors)]), 3)
+                            txt = 'id:' + str(track.track_id) + "-" + track.name
+                            org = (int(x1), int(y1)- 10)
+                            cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,0,255), 2)
+
+                #if status[1] == 1:
+                    #resutlSender.sendResult(frame, frame_idx)
+                if show_result:  
+                    frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)
+                    cv2.imshow("test",frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
+            
+            frame_idx +=1
+                        
+        print("end process with :",self.video_path)
         status[0] = 0
-        print("Can not init processer:")
-        return
+
     
+#def mainProcess(mode, type_camera, video_path, topic, topic_result, bootstrap_servers, status):
+def mainProcess(status, mode, type_camera, camera_path, topic, topic_result, bootstrap_servers):
+    print("Start process with status.value:",status[0])
+
+    processer = AI_Process(conf, mode)
+    processer.initialize(type_camera, camera_path, topic, topic_result, bootstrap_servers)
+    processer.image_process(status)
+    '''
     frame_idx = 0 
     isSuccess = True    
     colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for j in range(10)]
     while isSuccess and status[0] == 1: 
-        isSuccess, frame = cap.getFrame()
+        isSuccess, frame = processer.cap.getFrame()
         start_time = time.time()
         if isSuccess:
             print("frame_idx:",frame_idx)
@@ -184,7 +240,7 @@ def mainProcess(mode, type_camera, video_path, topic, topic_result, bootstrap_se
             fps = "FPS: " + str(int(fps))
             #print("frame_idx: {}  time process: {}  FPS: {}".format(frame_idx, time_process, fps))
             
-            show_result = False
+            show_result = True
             save_video = False
             if show_result or save_video or status[1] == 1: # status.value == 2: send AI result to kafka server
                 if ret is not None:
@@ -197,8 +253,8 @@ def mainProcess(mode, type_camera, video_path, topic, topic_result, bootstrap_se
                         org = (int(x1), int(y1)- 10)
                         cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,0,255), 2)
 
-            if status[1] == 1:
-                resutlSender.sendResult(frame, frame_idx)
+            #if status[1] == 1:
+                #resutlSender.sendResult(frame, frame_idx)
             if show_result:  
                 frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR)
                 cv2.imshow("test",frame)
@@ -207,8 +263,37 @@ def mainProcess(mode, type_camera, video_path, topic, topic_result, bootstrap_se
         
         frame_idx +=1
                      
-    print("end process with :",video_path)
+    print("end process with :",processer.video_path)
+    status[0] = 0
+    '''
+
+
+class Rectangle:
+    def __init__(self, weight, height):
+        self.weight = weight
+        self.height = height
+        print('khởi tạo của Rectangle -> weight: ', weight, ', height: ', weight)
+
+    def cal_perimeter(self):
+        # tính chu vi hình chữ nhật
+        perimeter = 2 * (self.weight + self.height)
+        return perimeter
+
+    def compare_square (self, weight, height):
+        # so sánh diện tích hình chữ nhật đưa vào và hình hiện tại
+        input_square = weight * height
+        current_square = self.weight * self.height
+        compare_result = False
+        if (input_square > current_square ): compare_result = True
+        print('The comparision result is : ', compare_result)
+        time.sleep(1)
+        return compare_result
     
+
+def function(myRectangle, status, processer):
+    while True:
+        time.sleep(1)
+        print('perimeter: ', myRectangle.cal_perimeter())
 
 class Item(BaseModel):
     name: str
@@ -250,6 +335,7 @@ def init_process(
     print("topic_result:",topic_result)
     print("bootstrap_servers:",bootstrap_servers)
     
+    '''
     if mode is None or type_camera is None or topic_result is None or bootstrap_servers is None:
         message = "mode, type_camera, topic_result, bootstrap_servers was None"
         return 1   
@@ -261,15 +347,30 @@ def init_process(
         if topic is None:
             message = "topic was None"
             return 1
-
+    '''
+        
     status = Array('i', range(10))
     status[0] = 1
     status[1] = 0
-    p = Process(target=mainProcess, args=(mode, type_camera, camera_path, topic, topic_result, bootstrap_servers, status))
+    #processer = AI_Processer(conf, mode)
+    #processer.initialize(type_camera, camera_path, topic, topic_result, bootstrap_servers)
+    p = Process(name ="process-1", target=mainProcess, args=(status, mode, type_camera, camera_path, topic, topic_result, bootstrap_servers, ))
+    p.start()
+
+
+    '''
+    myRectangle = Rectangle(2,3)
+    process1 = Process(target=function, args=(myRectangle,status, processer123, ))
+    #process2 = Process(target=myRectangle.compare_square, args=(3,5,))
+
+    process1.start()
+    
+    #process2.start()
+    '''
     processes["max"] +=1
     id_process = str(processes["max"])
     processes[id_process] = status
-    p.start()
+    
          
     return {"result": ret,
             "message":message,
@@ -372,12 +473,12 @@ if __name__ == "__main__":
     video = "../video/face_video.mp4"
     #facerecognize_process(video)
     #updateInfoFromdatabase()
-    
-    status = Value('i', 0)
-    status.value = 1
-    type_camera = "camera"
     mode = "security"
-    mainProcess(mode, type_camera, video, "", "", status)
+    processer = AI_Processer(conf, mode)
+    #processer.initialize(type_camera, camera_path, topic, topic_result, bootstrap_servers)
+    status = Array('i', range(10))
+    p = Process(name ="process-1", target=mainProcess, args=(processer, status, ))
+    p.start()
     '''
     now = datetime.datetime.now()
     data = {
