@@ -36,16 +36,12 @@ class Config(object):
         return result 
         
 
-conf = Config.load_json('config.json')
+
 
 if __name__ == "__main__":
+    conf = Config.load_json('config.json')
 
     print(conf.version)
-    print(conf.bind.address)
-    print(conf.bind.port)
-    print(conf.security.area_working)
-    print(conf.traffic.weights)
-    print(conf.security.bootstrap_servers)
 
     with open("config.json", "r") as jsonfile:
         config = json.load(jsonfile) # Reading the file
