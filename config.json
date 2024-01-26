@@ -14,26 +14,16 @@
             "traffic": false
         } 
     },
-    "security": {
-        "area_working":[0,0,1920,1080],
-        "WEB_SERVER":"http://172.16.50.91:8001/api/v1/attendance/attendance-daily",
-        "topic":"cam1",
-        "topic_ai":"cam1_ai",
-        "bootstrap_servers":["172.16.50.91:9092"],
-        "embeddings_path":"outs/data/faceEmbedings",
-        "weights": {
-            "faceDetection":"weights/yolov7-face/yolov7-tiny.pt",
-            "faceRecognition":"",         
-            "headPose":"deep-head-pose/hopenet_alpha1.pkl"
-        }
-    },
-    "traffic": {
-        "area_working":[0,0,1920,1080],
-        "weights": {
-            "vehicalDetection":"",
-            "plateDetection":"",
-            "characterDetection":""
-        }
+    "area_working":[0,0,1920,1080],
+    "WEB_SERVER":"http://172.16.50.91:8001/api/v1/attendance/attendance-daily",
+    "topic":"cam1",
+    "topic_ai":"cam1_ai",
+    "bootstrap_servers":["172.16.50.91:9092"],
+    "embeddings_path":"/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/outs/data/faceEmbedings",
+    "weights": {
+        "faceDetection":"/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/best.pt",
+        "faceRecognition":"",         
+        "headPose":"/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/hopenet_alpha1.pkl"
     },
     "debug": {
         "saveVideo":true,

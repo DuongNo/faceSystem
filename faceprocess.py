@@ -8,9 +8,9 @@ import sys
 myFolderPath = '/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem'
 sys.path.append(myFolderPath)
 
-from faceRecognition import faceRecogner
-from detector import Detector
-from tracker import Tracker
+from facerecognition import faceRecogner
+from .detector import Detector
+from .tracker import Tracker
 import cv2
 import torch
 import time
@@ -27,11 +27,11 @@ from typing import Union
 from pydantic import BaseModel
 from multiprocessing import Process, Value, Array 
 import base64
-from kafka_process import kafka_consummer
-from videoCapture import video_capture
-from headpose import headPose
-from producer_result import ResultProcuder
-from config_face import Config   
+from .kafka_process import kafka_consummer
+from .videoCapture import video_capture
+from hopenet import headPose
+#from producer_result import ResultProcuder
+from .config_face import Config   
 
 conf = Config.load_json('/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/config.json')
 embeddings_path = conf.embeddings_path
@@ -102,7 +102,7 @@ class faceProcess:
                     track.names.append(name)
                     counter = Counter(track.names)
                     most_common = counter.most_common()
-                    #print('track ID {} : {}'.format(track.track_id,most_common))
+                    print('track ID {} : {}'.format(track.track_id,most_common))
                     if len(track.names) >= 30:
                         counter = Counter(track.names)
                         most_common = counter.most_common()

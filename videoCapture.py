@@ -1,4 +1,4 @@
-from kafka import KafkaConsumer, KafkaError
+from kafka import KafkaConsumer
 import cv2
 import numpy as np
 import datetime
@@ -15,6 +15,8 @@ class video_capture:
         
         if self.video_path is not None:
             self.cap = cv2.VideoCapture(self.video_path)
+            frame_idx = 450
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         else:
             self.consumer = KafkaConsumer(
                         topic,
