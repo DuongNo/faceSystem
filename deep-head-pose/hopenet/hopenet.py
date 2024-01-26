@@ -5,11 +5,8 @@ import math
 import torch.nn.functional as F
 import torchvision
 from torchvision import transforms
-import cv2
+import cv2 
 from PIL import Image
-import utils_hopnet as utils
-import time
-from detector import Detector
 
 class Hopenet(nn.Module):
     # Hopenet with 3 output layers for yaw, pitch and roll
@@ -276,59 +273,6 @@ class headPose:
         
         return yaw_predicted, pitch_predicted, roll_predicted, (tdx, tdy, size)
     
-if __name__ == '__main__':
-    video_path =  "video/face_video.mp4"
-    video = cv2.VideoCapture(video_path)
-
-    width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))   # float
-    height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT)) # float
-
-    frame_num = 1
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    detector = Detector(classes = [0])
-    model_path = 'weights/yolov7-face/yolov7-tiny.pt'
-    model_path = 'weights/yolov7-face/yolov7-face.pt' 
-    detector.load_model(model_path)
-    
-    model_path = "deep-head-pose/hopenet_alpha1.pkl"
-    headpose = headPose(model_path)
-
-    video.set(cv2.CAP_PROP_POS_FRAMES, 2700)
-    n_frames = 500
-    ret = True
-    while ret:
-        print("frame_num:",frame_num)
-
-        ret,frame = video.read()
-        if ret == False:
-            break
-
-        cv2_frame = cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-        image = frame.copy()
-        yolo_dets = detector.detect(frame.copy())  
-        if yolo_dets is not None:
-            bbox = yolo_dets[:,:4]
-            pros = yolo_dets[:,4]
-            
-            for box, score in zip(bbox, pros):
-                box = list(map(int,box.tolist()))                
-
-                start_time = time.time()      
-                yaw_predicted, pitch_predicted, roll_predicted, sizes  = headpose.getHeadPose(box, image)
-                end_time = time.time()
-                time_process = end_time-start_time
-                
-                tdx, tdy, size = sizes
-                utils.draw_axis(frame, yaw_predicted, pitch_predicted, roll_predicted, tdx, tdy , size)
-                print(str(frame_num) + "_" +str(box[0]) + "_"+ str(time_process) + ' yaw_predicted = {}, pitch_predicted =  {},  roll_predicted = {}\n'.format(yaw_predicted, pitch_predicted, roll_predicted))
-            
-                frame = cv2.rectangle(frame, (box[0],box[1]), (box[2],box[3]), (0,0,255), 6)
-        frame = cv2.resize(frame, (960,720), interpolation = cv2.INTER_LINEAR) 
-        cv2.imshow("image",frame)
-        if cv2.waitKey(0) & 0xFF == ord('q'):
-            break
-        frame_num += 1
-    video.release()
 
 
         

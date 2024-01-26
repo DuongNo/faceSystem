@@ -1,9 +1,9 @@
 from setuptools import setup
 
 setup(
-   name='faceSystem',
+   name='hopenet',
    version='1.0',
-   description='face processing',
+   description='head pose processing',
    author='duong',
-   packages=['faceSystem']
+   packages=['hopenet']
 )
