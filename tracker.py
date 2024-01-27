@@ -18,8 +18,8 @@ class Tracker:
         max_cosine_distance = 0.4
         nn_budget = None
 
-        encoder_model_filename = '/home/vdc/project/computervison/python/face/faceSystem/deep_sort/model/mars-small128.pb'
-        self.faces_path = "/home/vdc/project/computervison/python/face/faceSystem/outs/tracks"
+        encoder_model_filename = '/home/vdc/project/computervision/python/VMS/weights/mars-small128.pb'
+        self.faces_path = "/home/vdc/project/computerviison/python/face/faceSystem/outs/tracks"
 
         metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
         self.tracker = DeepSortTracker(metric)
@@ -58,7 +58,7 @@ class Tracker:
 
             tracks.append(Track(id, bbox, name))
 
-            if track.name == "" and track.age - track.step_recognize > 3:
+            if track.name == "" and track.age - track.step_recognize > 1:
                 x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
                 x1 = max(x1,0)
                 y1 = max(y1,0)
