@@ -27,11 +27,12 @@ from typing import Union
 from pydantic import BaseModel
 from multiprocessing import Process, Value, Array 
 import base64
-from .kafka_process import kafka_consummer
+#from .kafka_process import kafka_consummer
 from .videoCapture import video_capture
 from hopenet import headPose
 #from producer_result import ResultProcuder
 from .config_face import Config   
+from ultralytics import YOLO
 
 conf = Config.load_json('/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/config.json')
 embeddings_path = conf.embeddings_path
@@ -54,37 +55,36 @@ class faceProcess:
         self.tracker = Tracker()
         self.detection_threshold = 0.25
 
+        '''
         self.detector = Detector(classes = [0,1,2,3,4,5])
         #model_path = 'weights/yolov7-face/yolov7-face.pt'
         self.detector_path = self.conf.weights.faceDetection  
         self.detector.load_model(self.detector_path)
+        '''
+        self.detector = YOLO('/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/yolov8l_face.pt')
 
         self.head_pose_path = self.conf.weights.headPose
         self.headpose = headPose(self.head_pose_path)
 
     def facerecognize(self, frame):
-        yolo_dets = self.detector.detect(frame.copy())  
-        if yolo_dets is not None:
-            bbox = yolo_dets[:,:4]
-            pros = yolo_dets[:,4]
-            classes = yolo_dets[:,-1]
-            num_objects = yolo_dets.shape[0]
-
-            bboxes = []
-            scores = []
+        results = self.detector(frame)  # predict on an image
+        if results is not None:
+            boxes = results[0].boxes.xyxy.cpu()
+            clss = results[0].boxes.cls.cpu().tolist()
+            confs = results[0].boxes.conf.float().cpu().tolist()
+            
             detections = []
-            for box, score in zip(bbox, pros):
+            for box, cls, conf in zip(boxes, clss, confs):
                 bbox = list(map(int,box.tolist()))
+                cls = int(cls)
                 #x1, y1, x2, y2 = bbox
                 #im = cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 3)
                 #im = cv2.resize(im, (960,720), interpolation = cv2.INTER_LINEAR)
                 #cv2.imshow("frame detect",im)
                 
-
-                # DeepSORT -> Extracting Bounding boxes and its confidence scores.
-                if score > self.detection_threshold:
-                    detections.append([bbox[0],bbox[1], bbox[2],bbox[3], score])
-
+                if conf > self.detection_threshold:
+                    detections.append([bbox[0],bbox[1], bbox[2],bbox[3], conf])
+                    
             self.tracker.update(frame, detections)
 
             
