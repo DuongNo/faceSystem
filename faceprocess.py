@@ -9,7 +9,6 @@ myFolderPath = '/home/vdc/project/computervision/python/VMS/faceprocess/faceSyst
 sys.path.append(myFolderPath)
 
 from facerecognition import faceRecogner
-from .detector import Detector
 from .tracker import Tracker
 import cv2
 import torch
@@ -103,11 +102,11 @@ class faceProcess:
                     counter = Counter(track.names)
                     most_common = counter.most_common()
                     print('track ID {} : {}'.format(track.track_id,most_common))
-                    if len(track.names) >= 30:
+                    if len(track.names) >= 20:
                         counter = Counter(track.names)
                         most_common = counter.most_common()
                         #print('track ID {} : {}'.format(track.track_id,most_common))
-                        if most_common[0][1] >  30:
+                        if most_common[0][1] >  20:
                             track.name = most_common[0][0]
                             track.employee_id = employee_id
 
@@ -149,15 +148,13 @@ class AI_Process:
         self.face_processer = faceProcess(conf)     
         self.mode = mode
         
-    def initialize(self, type_camera, video_path, topic, topic_result, bootstrap_servers):
+    def initialize(self, type_camera, video_path):
         self.video_path = video_path
         try:
             #self.resutlSender = ResultProcuder(topic_result, bootstrap_servers)
-        
             if type_camera == "camera" or type_camera == "cameraAI":
                 self.cap = video_capture(video_path=video_path)
-            else:
-                self.cap = video_capture(topic=topic, bootstrap_servers=bootstrap_servers)
+                print("init video_capture:")
         except Exception as e:
             print(e)
             status[0] = 0
@@ -184,6 +181,7 @@ class AI_Process:
             start_time = time.time()
             if isSuccess:
                 print("frame_idx:",frame_idx)
+                print("frame.shape:",frame.shape)
                 ret = self.process(frame)
                     
                 end_time = time.time()
