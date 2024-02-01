@@ -5,11 +5,11 @@ import os
 from random import randint
 import uuid
 import sys
-myFolderPath = '/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem'
-sys.path.append(myFolderPath)
+#myFolderPath = '/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem'
+#sys.path.append(myFolderPath)
 
 from facerecognition import faceRecogner
-from .tracker import Tracker
+from face_tracker import Tracker
 import cv2
 import torch
 import time
@@ -73,9 +73,9 @@ class faceProcess:
             confs = results[0].boxes.conf.float().cpu().tolist()
             
             detections = []
-            for box, cls, conf in zip(boxes, clss, confs):
+            for box, cls_name, conf in zip(boxes, clss, confs):
                 bbox = list(map(int,box.tolist()))
-                cls = int(cls)
+                cls_name = int(cls_name)
                 #x1, y1, x2, y2 = bbox
                 #im = cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 3)
                 #im = cv2.resize(im, (960,720), interpolation = cv2.INTER_LINEAR)
