@@ -13,6 +13,7 @@ import copy
 import time
 from pathlib import Path
 from collections import Counter
+from ultralytics import YOLO
 
 from .InsightFace_Pytorch.config import get_config
 from .InsightFace_Pytorch.Learner import face_learner
@@ -22,14 +23,7 @@ class faceRecogner:
     def __init__(self, embeddingsPath=None, clearInfo=False):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         print("device:",self.device)
-        '''
-        self.model = InceptionResnetV1(
-                classify=False,
-                pretrained="casia-webface"
-            ).to(self.device)
-        '''
         
-        #mtcnn = MTCNN()
         self.conf = get_config(False)
         self.learner = face_learner(self.conf, True)
         if self.conf.device.type == 'cpu':
@@ -47,8 +41,6 @@ class faceRecogner:
         #    self.targets, self.names = load_facebank(self.conf)
         #    print('facebank loaded')
         
-        #onnx_model = onnx.load('weights/facerecognition/model_cam_29fcs.onnx')
-        #self.model = ConvertModel(onnx_model).to(self.device)
         self.model = None
         self.embeddingsPath = embeddingsPath
         
@@ -63,6 +55,8 @@ class faceRecogner:
             print("Load Info:",len(self.employee_ids))    
         self.power = pow(10, 6)
         print("len of self.faceNames:",len(self.faceNames))
+        
+        self.detector = YOLO('/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/yolov8l_face.pt')
 
     def process(self, face, bbox=None):
         if bbox is not None: 
@@ -180,6 +174,26 @@ class faceRecogner:
         vec = self.learner.model(self.conf.test_transform(face).to(self.conf.device).unsqueeze(0))
         #print("vec.shape:",vec.shape)
         return vec
+    
+    def detect(self, image):
+        results = self.detector(image)  # predict on an image
+        if results is not None: 
+            boxes = results[0].boxes.xyxy.cpu()
+            clss = results[0].boxes.cls.cpu().tolist()
+            confs = results[0].boxes.conf.float().cpu().tolist()
+            
+            detections = []
+            for box, cls_name, conf in zip(boxes, clss, confs):
+                bbox = list(map(int,box.tolist()))
+                cls_name = int(cls_name)
+                #x1, y1, x2, y2 = bbox
+                #im = cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 3)
+                #im = cv2.resize(im, (960,720), interpolation = cv2.INTER_LINEAR)
+                #cv2.imshow("frame detect",im)
+                
+                if conf > 0.3:
+                    detections.append([bbox[0],bbox[1], bbox[2],bbox[3]])
+        return detections
 
     def register(self, face, name, id, get_vector= False):
         out = np.where(self.employee_ids == id)[0]
@@ -187,7 +201,7 @@ class faceRecogner:
             print("employee_ids: {} was exist:".format(id))
             return 1
             
-        boxes, _ = self.detect(face)
+        boxes = self.detect(face)
         print("boxes register:",boxes)
         if boxes is None:
             print("Dont have any faces")
@@ -195,7 +209,7 @@ class faceRecogner:
         
         bboxOK = False
         for box in boxes:
-            if box[2] - box[0] > 80 and box[3] - box[1] > 80:
+            if box[2] - box[0] > 50 and box[3] - box[1] > 50:
                 face = self.extract_face(box, face)
                 vec = self.face2vec(face)
                 bboxOK = True
@@ -229,7 +243,7 @@ class faceRecogner:
             return 1, None
         out = out[0]
         
-        boxes, _ = self.detect(face)
+        boxes = self.detect(face)
         print("boxes updateFace:",boxes)
         if boxes is None:
             print("Dont have any faces")
