@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from collections import Counter
 from ultralytics import YOLO
+from hopenet import headPose
 
 from .InsightFace_Pytorch.config import get_config
 from .InsightFace_Pytorch.Learner import face_learner
@@ -32,31 +33,19 @@ class faceRecogner:
             self.learner.load_state(self.conf, 'ir_se50.pth', False, True)
         self.learner.model.eval()
         print('learner loaded')
-        
-        #update = False
-        #if update:
-        #    self.targets, self.names = prepare_facebank(self.conf, self.learner.model, mtcnn, False)
-        #    print('facebank updated')
-        #else:
-        #    self.targets, self.names = load_facebank(self.conf)
-        #    print('facebank loaded')
-        
+    
         self.model = None
         self.embeddingsPath = embeddingsPath
         
-        if clearInfo:
-            self.employee_ids = np.empty(shape=[0])
-            self.faceNames = np.empty(shape=[0])
-            self.faceEmbeddings = []
-            self.saveInfo()
-            print("Clear Info")
-        else:   
-            self.employee_ids, self.faceEmbeddings, self.faceNames = self.load_faceslist(embeddingsPath)   
-            print("Load Info:",len(self.employee_ids))    
-        self.power = pow(10, 6)
+        self.employee_ids, self.faceEmbeddings, self.faceNames = self.load_faceslist(embeddingsPath)   
+        print("Load Info:",len(self.employee_ids))    
         print("len of self.faceNames:",len(self.faceNames))
+        self.power = pow(10, 6)
         
-        self.detector = YOLO('/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/yolov8l_face.pt')
+        self.detector = YOLO('/home/weights/facedetection/facedec_yolov8l.pt')
+        
+        self.head_pose_path = "/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/hopenet_alpha1.pkl"
+        self.headpose = headPose(self.head_pose_path)
 
     def process(self, face, bbox=None):
         if bbox is not None: 
@@ -64,7 +53,10 @@ class faceRecogner:
             
         face = Image.fromarray(face)
         faces = [face]
-        results, score = self.learner.infer(self.conf, faces, self.faceEmbeddings, True)
+        if len(self.faceEmbeddings) > 0:
+            results, score = self.learner.infer(self.conf, faces, self.faceEmbeddings, True)
+        else:
+            return "Unknown", -1, -1
         
         if results[0] == -1:
             name = "Unknown"
@@ -99,75 +91,6 @@ class faceRecogner:
         names = np.load(DATA_PATH+'/usernames.npy', allow_pickle=True)
         employee_ids = np.load(DATA_PATH+'/employee_ids.npy', allow_pickle=True)
         return employee_ids, embeds, names
-    
-    def clearInfo(self):
-        self.employee_ids = np.empty(shape=[0])
-        self.faceNames = np.empty(shape=[0])
-        self.faceEmbeddings = []
-    
-    def trans(self,img):
-        transform = transforms.Compose([
-                transforms.ToTensor(),
-                fixed_image_standardization
-            ])
-        return transform(img)
-    
-    def inference(self, model, face, local_embeds, threshold = 1):
-        #local: [n,512] voi n la so nguoi trong faceslist
-        embeds = []
-        embeds.append(model(self.trans(face).to(self.device).unsqueeze(0).permute(0, 3, 2, 1)))
-        detect_embeds = torch.cat(embeds) #[1,512]
-        #print("local_embeds.shape:",local_embeds.shape)
-        #print("detect_embeds.shape:",detect_embeds.shape)
-                        #[1,512,1]                                      [1,512,n]
-        norm_diff = detect_embeds.unsqueeze(-1) - torch.transpose(local_embeds, 0, 1).unsqueeze(0)
-        #norm_diff = CosineSimilarity().forward(detect_embeds.unsqueeze(-1), torch.transpose(local_embeds, 0, 1).unsqueeze(0))
-        #print("norm_diff:",norm_diff)
-        norm_score = torch.sum(torch.pow(norm_diff, 2), dim=1) #(1,n), moi cot la tong khoang cach euclide so vs embed moi
-        #print("norm_score:",norm_score)
-        
-        min_dist, embed_idx = torch.min(norm_score, dim = 1)
-        #print(min_dist*self.power, self.faceNames[embed_idx])
-        # print(min_dist.shape)
-        if min_dist*self.power > threshold:
-            return -1, -1
-        else:
-            return embed_idx, min_dist.double()
-        
-    def distance_origin(self, embeddings1, embeddings2, distance_metric=0):
-        if distance_metric == 0:
-            # Euclidian distance
-            embeddings1 = embeddings1/np.linalg.norm(embeddings1, axis=1, keepdims=True)
-            embeddings2 = embeddings2/np.linalg.norm(embeddings2, axis=1, keepdims=True)
-            dist = np.sqrt(np.sum(np.square(np.subtract(embeddings1, embeddings2))))
-            return dist      
-        else:
-            # Distance based on cosine similarity
-            dot = np.sum(np.multiply(embeddings1, embeddings2), axis=1)
-            norm = np.linalg.norm(embeddings1, axis=1) * np.linalg.norm(embeddings2, axis=1)
-            similarity = dot/norm
-            dist = np.arccos(similarity) / math.pi
-            return dist[0]
-
-    def distance2(self, embeddings1, embeddings2, distance_metric=0):
-        embeddings1 = embeddings1.to("cpu")
-        embeddings2 = embeddings2.to("cpu")    
-        embeddings1 = embeddings1.detach().numpy()
-        embeddings2 = embeddings2.detach().numpy()
-        if distance_metric == 0:
-            # Euclidian distance
-            embeddings1 = embeddings1/np.linalg.norm(embeddings1, axis=1, keepdims=True)
-            embeddings2 = embeddings2/np.linalg.norm(embeddings2, keepdims=True)
-            dist = np.sqrt(np.sum(np.square(np.subtract(embeddings1, embeddings2))))
-            return torch.from_numpy(np.array([dist]))
-        else:
-            # Distance based on cosine similarity
-            dot = np.sum(np.multiply(embeddings1, embeddings2), axis=1)
-            norm = np.linalg.norm(embeddings1, axis=1) * np.linalg.norm(embeddings2)
-            similarity = dot/norm
-            dist = np.arccos(similarity) / math.pi
-            return torch.from_numpy(np.array([dist[0]]))
-        
             
     def face2vec(self,face):
         face = Image.fromarray(face)
@@ -181,18 +104,23 @@ class faceRecogner:
             boxes = results[0].boxes.xyxy.cpu()
             clss = results[0].boxes.cls.cpu().tolist()
             confs = results[0].boxes.conf.float().cpu().tolist()
+            print("Detected face:",boxes)
             
             detections = []
             for box, cls_name, conf in zip(boxes, clss, confs):
                 bbox = list(map(int,box.tolist()))
+                print("bbox:",bbox)
                 cls_name = int(cls_name)
                 #x1, y1, x2, y2 = bbox
-                #im = cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 3)
+                #im = cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 3)
                 #im = cv2.resize(im, (960,720), interpolation = cv2.INTER_LINEAR)
                 #cv2.imshow("frame detect",im)
+                #cv2.waitKey(0)
                 
                 if conf > 0.3:
                     detections.append([bbox[0],bbox[1], bbox[2],bbox[3]])
+        else:
+            print("Detect can't find face")
         return detections
 
     def register(self, face, name, id, get_vector= False):
@@ -250,7 +178,7 @@ class faceRecogner:
             return 1, None
         bboxOK = False
         for box in boxes:
-            if box[2] - box[0] > 80 and box[3] - box[1] > 80:
+            if box[2] - box[0] > 50 and box[3] - box[1] > 50:
                 face = self.extract_face(box, face)
                 vec = self.face2vec(face)
                 bboxOK = True
@@ -275,6 +203,7 @@ class faceRecogner:
         out = np.where(self.employee_ids == id)[0]
         print("employee_ids:",out)
         if len(out) < 1:
+            print("Can't find employee_ids:",id)
             return 1
         out = out[0]
         
@@ -288,8 +217,62 @@ class faceRecogner:
         print("employee_ids.shape:",self.employee_ids.shape)
         print('Update Completed! There are {0} people in FaceLists'.format(self.employee_ids.shape[0]))
         return 0
-        
-    def update_faceEmbeddings(self,imagePath, embeddingPath):
+    
+    def evaluate(self,imagePath, embeddingPath):
+        employee_ids, faceEmbeddings, faceNames = self.load_faceslist(embeddingPath) 
+        idx = 0
+        correct = 0
+        for name in os.listdir(imagePath):
+            for file in glob.glob(os.path.join(imagePath, name)+'/*.png'):
+                #print(name)
+                try:
+                    img = Image.open(file)
+                    #img = cv2.resize(img, (112,112), interpolation = cv2.INTER_LINEAR)
+                except:
+                    continue 
+                
+                img = np.array(img)
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                
+                results = self.detector(img)
+                if results is None:
+                    continue           
+                boxes = results[0].boxes.xyxy.cpu()
+                if boxes.nelement() == 0:
+                    print("empty boxes")
+                    continue
+
+                headposeOK = False
+                for box in boxes:
+                    bbox = list(map(int,box.tolist()))
+                    face = self.extract_face(bbox, img)
+                    
+                    yaw_predicted, pitch_predicted, roll_predicted, _  = self.headpose.getHeadPose(bbox, img) 
+                    if yaw_predicted is None or pitch_predicted is None or roll_predicted is None:
+                        continue                  
+                    if (yaw_predicted > 20 or yaw_predicted < -20) or (pitch_predicted > 20 or pitch_predicted < -20) or (roll_predicted > 20 or roll_predicted < -20):
+                        continue
+                    headposeOK = True        
+                if not headposeOK:
+                    continue
+                #cv2.imshow("face",face)
+                #cv2.waitKey(0)
+                #return
+                idx +=1
+                face = Image.fromarray(face)
+                faces = [face]
+                results, score = self.learner.infer(self.conf, faces, faceEmbeddings, True)
+                if results[0] == -1:
+                    usr = "Unknown"
+                else:
+                    usr = faceNames[results[0]]
+                
+                if name == usr:
+                    correct +=1
+                print(f"accuracy = {correct}/{idx}")
+
+                     
+    def createFaceBank(self,imagePath, embeddingPath):
         embeddings = []
         names = []
         employee_ids = []
@@ -299,23 +282,43 @@ class faceRecogner:
         for usr in os.listdir(imagePath):
             idx +=1
             embeds = []
-            for file in glob.glob(os.path.join(imagePath, usr)+'/*.jpg'):
-                # print(usr)
+            for file in glob.glob(os.path.join(imagePath, usr)+'/*.png'):
+                #print(usr)
                 try:
                     img = Image.open(file)
+                    #img = cv2.resize(img, (112,112), interpolation = cv2.INTER_LINEAR)
                 except:
                     continue
+                
                 img = np.array(img)
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                boxes, _ = self.detector.detect(img)
-                if boxes is None:
+                
+                results = self.detector(img)
+                if results is None:
+                    print("empty result")
                     continue
+                boxes = results[0].boxes.xyxy.cpu()
+                print("boxes",boxes)
+                if boxes.nelement() == 0:
+                    print("empty boxes")
+                    continue
+                headposeOK = False
                 for box in boxes:
                     bbox = list(map(int,box.tolist()))
-                    face = self.extract_face(bbox, img)
+                    face = self.extract_face(bbox, img)  
+                                  
+                    yaw_predicted, pitch_predicted, roll_predicted, _  = self.headpose.getHeadPose(bbox, img) 
+                    if yaw_predicted is None or pitch_predicted is None or roll_predicted is None:
+                        continue                  
+                    if (yaw_predicted > 20 or yaw_predicted < -20) or (pitch_predicted > 20 or pitch_predicted < -20) or (roll_predicted > 20 or roll_predicted < -20):
+                        continue
+                    headposeOK = True        
+                if not headposeOK:
+                    continue
                 face = Image.fromarray(face)
                 with torch.no_grad():
-                    embeds.append(self.model(self.trans(face).to(device).unsqueeze(0).permute(0, 3, 2, 1))) #1 anh, kich thuoc [1,512]
+                    #embeds.append(self.model(self.trans(face).to(device).unsqueeze(0).permute(0, 3, 2, 1))) #1 anh, kich thuoc [1,512]
+                    embeds.append(self.learner.model(self.conf.test_transform(face).to(self.conf.device).unsqueeze(0)))
             if len(embeds) == 0:
                 continue
             embedding = torch.cat(embeds).mean(0, keepdim=True) #dua ra trung binh cua 30 anh, kich thuoc [1,512]
@@ -345,6 +348,11 @@ class faceRecogner:
         np.save(embeddingPath+"/usernames", self.faceNames)
         np.save(embeddingPath+"/employee_ids", self.employee_ids)
         print('Update Completed! There are {0} people in FaceLists'.format(self.faceNames.shape[0]))
+        
+    def clearInfo(self):
+        self.employee_ids = np.empty(shape=[0])
+        self.faceNames = np.empty(shape=[0])
+        self.faceEmbeddings = []   
         
 
 
