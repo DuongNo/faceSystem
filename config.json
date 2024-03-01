@@ -1,29 +1,20 @@
 {
     "version": 1,
-    "bind": {
-        "address": "127.0.0.1",
-        "port": 18555
-    },
     "projectPath":"",
-    "mode": {
-        "_comment1":"get input from <camera> or <kafka>",
-        "input":"camera", 
-        "_comment2":"ON/OFF features AI run ",
-        "ai_features":{
-            "security": true,
-            "traffic": false
-        } 
-    },
-    "area_working":[0,0,1920,1080],
-    "WEB_SERVER":"http://172.16.50.91:8001/api/v1/attendance/attendance-daily",
-    "topic":"cam1",
-    "topic_ai":"cam1_ai",
-    "bootstrap_servers":["172.16.50.91:9092"],
+    "area_working":[300,300,3072,1728],
     "embeddings_path":"/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/outs/data/faceEmbedings",
     "weights": {
-        "faceDetection":"/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/best.pt",
+        "faceDetection":"/home/vdc/project/computervision/python/VMS/weights/facedetection/facedec_yolov8n.pt",
         "faceRecognition":"",         
         "headPose":"/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/hopenet_alpha1.pkl"
+    },
+    "threshold":{
+        "vehicalDetection":0.5,
+        "plateDetection":0.5,
+        "characterDetection":0.5
+    },
+    "classes":{
+        "vehicalDetection":""       
     },
     "debug": {
         "saveVideo":true,

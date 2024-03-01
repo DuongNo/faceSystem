@@ -21,9 +21,11 @@ from .InsightFace_Pytorch.Learner import face_learner
 from .InsightFace_Pytorch.utils import load_facebank, prepare_facebank
 
 class faceRecogner:
-    def __init__(self, embeddingsPath=None, clearInfo=False):
+    def __init__(self, config):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         print("device:",self.device)
+        
+        self.config = config
         
         self.conf = get_config(False)
         self.learner = face_learner(self.conf, True)
@@ -35,16 +37,16 @@ class faceRecogner:
         print('learner loaded')
     
         self.model = None
-        self.embeddingsPath = embeddingsPath
+        self.embeddingsPath = self.config.embeddings_path
         
-        self.employee_ids, self.faceEmbeddings, self.faceNames = self.load_faceslist(embeddingsPath)   
+        self.employee_ids, self.faceEmbeddings, self.faceNames = self.load_faceslist(self.embeddingsPath)   
         print("Load Info:",len(self.employee_ids))    
         print("len of self.faceNames:",len(self.faceNames))
         self.power = pow(10, 6)
         
-        self.detector = YOLO('/home/weights/facedetection/facedec_yolov8l.pt')
+        self.detector = YOLO(self.config.weights.faceDetection)
         
-        self.head_pose_path = "/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/hopenet_alpha1.pkl"
+        self.head_pose_path = self.config.weights.headPose
         self.headpose = headPose(self.head_pose_path)
 
     def process(self, face, bbox=None):

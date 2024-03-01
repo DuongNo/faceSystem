@@ -36,7 +36,7 @@ from ultralytics import YOLO
 conf = Config.load_json('/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/config.json')
 embeddings_path = conf.embeddings_path
 
-faceReg = faceRecogner(embeddings_path)
+faceReg = faceRecogner(conf)
 processes = {"max":0}
 
 def file2image(file):
@@ -50,24 +50,18 @@ class faceProcess:
     def __init__(self, conf):
         self.conf = conf
         
-        self.faceRecognition = faceRecogner(embeddings_path)
+        self.faceRecognition = faceRecogner(self.conf)
         self.tracker = Tracker()
         self.detection_threshold = 0.25
 
-        '''
-        self.detector = Detector(classes = [0,1,2,3,4,5])
-        #model_path = 'weights/yolov7-face/yolov7-face.pt'
-        self.detector_path = self.conf.weights.faceDetection  
-        self.detector.load_model(self.detector_path)
-        '''
-        self.detector = YOLO('/home/vdc/project/computervision/python/VMS/faceprocess/faceSystem/weights/yolov8l_face.pt')
+        self.detector = YOLO(self.conf.weights.faceDetection)
 
         self.head_pose_path = self.conf.weights.headPose
         self.headpose = headPose(self.head_pose_path)
 
     def facerecognize(self, frame):
         results = self.detector(frame)  # predict on an image
-        if results is not None:
+        if results is not None: 
             boxes = results[0].boxes.xyxy.cpu()
             clss = results[0].boxes.cls.cpu().tolist()
             confs = results[0].boxes.conf.float().cpu().tolist()
