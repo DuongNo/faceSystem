@@ -16,6 +16,11 @@
     "classes":{
         "vehicalDetection":""       
     },
+    "default_security":{
+        "mode":"security",
+        "type_camera":"camera",
+        "camera_path":"/home/vdc/project/computervision/python/video/face_video.mp4"
+    },
     "debug": {
         "saveVideo":true,
         "showImg":false
