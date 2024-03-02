@@ -1,22 +1,32 @@
-# Deep SORT
+# Environtment
+
+# Submodule
 ## Installation
 
-First, clone the repository:
+face tracking:
 ```
-git clone https://github.com/nwojke/deep_sort.git
+cd tracking
+python3 setup.py develop
 ```
-Then, download pre-generated of tracker deepsort in here
-[here](https://drive.google.com/open?id=18fKzfqnqhqW3s9zwsCbnVJ5XF2JFeqMp).
-
-then replace file track.py in folder deep_sort by track.py at outside
-
-
-## weights for detector in server
+facerecognition:
 ```
-/home/1.data/weights/yolov7-face
+cd facerecognition
+python3 setup.py develop
 ```
 
-## test face recognition
+Head Pose:
 ```
-python test.py
+cd deep-head-pose
+python3 setup.py develop
+```
+
+
+## weights 
+```
+/home/weights/face/facedetection
+```
+
+## Run app
+```
+./scripts/run.sh
 ```
