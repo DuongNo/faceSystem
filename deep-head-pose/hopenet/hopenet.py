@@ -246,12 +246,12 @@ class headPose:
             tdy = (y_min + y_max) / 2
             return face, (tdx, tdy, size)
         else:
-            return None, None
+            return None, (None, None, None)
         
     def getHeadPose(self, bbox, frame):
         face, (tdx, tdy, size) =  self.extractFace(bbox, frame)     
         if face is None:
-            return None, None, None
+            return None, None, None, None
         face = cv2.cvtColor(face,cv2.COLOR_BGR2RGB)
         img = Image.fromarray(face)
         

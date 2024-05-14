@@ -4,19 +4,13 @@ from PIL import Image
 import torch
 from torchvision import transforms
 import numpy as np
-from facenet_pytorch import MTCNN, InceptionResnetV1, fixed_image_standardization
+#from facenet_pytorch import MTCNN, InceptionResnetV1, fixed_image_standardization
 import time
 import glob
 from datetime import datetime
 import json
-from torch.nn import CosineSimilarity
 import math
-from sklearn.metrics import pairwise
-from hopenet import headPose
 
-
-#load yolov7
-from detector import Detector
 
 import torch.backends.cudnn as cudnn
 from numpy import random
@@ -26,8 +20,6 @@ from pathlib import Path
 from collections import Counter
 
 from tracker import Tracker
-import onnx
-from onnx2pytorch import ConvertModel
 
 from InsightFace_Pytorch.config import get_config
 from InsightFace_Pytorch.Learner import face_learner
@@ -36,15 +28,6 @@ from InsightFace_Pytorch.util import load_facebank, prepare_facebank
 class faceRecogner:
     def __init__(self, embeddingsPath=None, clearInfo=False):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        print("device:",self.device)
-        '''
-        self.model = InceptionResnetV1(
-                classify=False,
-                pretrained="casia-webface"
-            ).to(self.device)
-        '''
-        
-        #mtcnn = MTCNN()
         self.conf = get_config(False)
         self.learner = face_learner(self.conf, True)
         if self.conf.device.type == 'cpu':
@@ -53,24 +36,8 @@ class faceRecogner:
             self.learner.load_state(self.conf, 'ir_se50.pth', False, True)
         self.learner.model.eval()
         print('learner loaded')
-        
-        #update = False
-        #if update:
-        #    self.targets, self.names = prepare_facebank(self.conf, self.learner.model, mtcnn, False)
-        #    print('facebank updated')
-        #else:
-        #    self.targets, self.names = load_facebank(self.conf)
-        #    print('facebank loaded')
-        
-        #onnx_model = onnx.load('weights/facerecognition/model_cam_29fcs.onnx')
-        #self.model = ConvertModel(onnx_model).to(self.device)
-        self.model = None
-        
-        #self.detector = MTCNN(thresholds= [0.7, 0.7, 0.8] ,keep_all=True, device = self.device)
-        self.detector = Detector(classes = [0])
-        model_path = 'weights/yolov7-face/yolov7-tiny.pt'
-        self.detector.load_model(model_path)
-        #self.model.eval()
+           
+        self.detector = None
         self.embeddingsPath = embeddingsPath
         
         if clearInfo:
